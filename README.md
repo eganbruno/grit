@@ -24,22 +24,30 @@ untracked file and a stash, and `dashboard` is clean and up to date.
 
 ## Install
 
+Homebrew, on macOS or Linux:
+
+```bash
+brew install eganbruno/tap/grit
+```
+
+Or a prebuilt binary, no Rust needed:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/eganbruno/grit/releases/latest/download/grit-installer.sh | sh
+```
+
+From source, if you have a Rust toolchain:
+
 ```bash
 cargo install --git https://github.com/eganbruno/grit --locked
 ```
 
-Or from a clone:
-
-```bash
-git clone https://github.com/eganbruno/grit && cd grit && cargo install --path . --locked
-```
-
 `--locked` builds against the committed `Cargo.lock`. Without it Cargo resolves
-dependencies afresh, so a bad upstream release can break your install while a
+dependencies afresh, so a bad upstream release can break your install when a
 lockfile build would have been fine.
 
-Both put the binary in `~/.cargo/bin`, which rustup already added to your
-`PATH`. Homebrew and prebuilt binaries land with the first tagged release.
+Prebuilt binaries are published for macOS and Linux on both Apple Silicon/ARM
+and Intel/x86.
 
 ## Quick start
 

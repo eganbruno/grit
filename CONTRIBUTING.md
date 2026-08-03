@@ -178,7 +178,12 @@ Both steps are already done for this repository; they are recorded for anyone
 forking it.
 
 1. Create the tap repository named in the `tap` key — `eganbruno/homebrew-tap`.
-   It can be empty.
+
+   It needs **at least one commit on the default branch**. A repository with no
+   commits has no `main` for the publish job to check out, and the job fails
+   with `fatal: couldn't find remote ref refs/heads/main` — after the binaries
+   have already been built and the release published. Adding a README is
+   enough.
 2. Add a `HOMEBREW_TAP_TOKEN` secret to *this* repository: a fine-grained
    personal access token scoped to the tap repo only, with
    **Contents: read and write**.
