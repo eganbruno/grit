@@ -45,3 +45,22 @@ serde_json = "1.0.151"
 [profile.release]
 lto = "thin"
 strip = true
+
+# Release engineering, driven by `dist` (https://github.com/axodotdev/cargo-dist).
+# `dist init` reads this and generates .github/workflows/release.yml; see the
+# Releasing section of CONTRIBUTING.md.
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+installers = ["shell", "homebrew"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+]
+# The tap repository that receives the generated formula. Must exist, and the
+# release workflow needs a HOMEBREW_TAP_TOKEN secret with write access to it.
+tap = "eganbruno/homebrew-tap"
+publish-jobs = ["homebrew"]
+install-updater = false
