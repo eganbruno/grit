@@ -5,5 +5,6 @@
 
 pub mod error;
 pub mod registry;
+pub mod vcs;
 
 pub use error::{Error, Result};
