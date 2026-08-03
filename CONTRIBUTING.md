@@ -157,26 +157,34 @@ CI runs exactly these on Linux and macOS, plus a `cargo check` against the
 
 ## Releasing
 
-Releases are built by [`dist`](https://github.com/axodotdev/cargo-dist). The
-configuration lives in `[workspace.metadata.dist]` in `Cargo.toml`; the
-workflow that consumes it is *generated*, not hand-written, so it is
-regenerated rather than edited.
+Releases are built by [`dist`](https://github.com/axodotdev/cargo-dist).
+
+`.github/workflows/release.yml` is **generated** from
+`[workspace.metadata.dist]` in `Cargo.toml`. Treat it like a lockfile: it is
+committed, but do not hand-edit it. Change the config and regenerate:
+
+```bash
+cargo install cargo-dist --locked   # once
+dist init --yes                     # rewrites release.yml
+dist plan                           # shows what a release would produce
+```
+
+The same applies after upgrading dist, since the workflow is pinned to the
+`cargo-dist-version` recorded in the config.
 
 ### One-time setup
 
+Both steps are already done for this repository; they are recorded for anyone
+forking it.
+
 1. Create the tap repository named in the `tap` key — `eganbruno/homebrew-tap`.
    It can be empty.
-2. Add a `HOMEBREW_TAP_TOKEN` secret to this repository: a fine-grained
-   personal access token with **Contents: read and write** on the tap repo
-   only.
-3. Install dist and generate the workflow:
+2. Add a `HOMEBREW_TAP_TOKEN` secret to *this* repository: a fine-grained
+   personal access token scoped to the tap repo only, with
+   **Contents: read and write**.
 
-   ```bash
-   cargo install cargo-dist --locked
-   dist init --yes
-   ```
-
-   This writes `.github/workflows/release.yml`. Commit it.
+   The token is needed because the automatic `GITHUB_TOKEN` is scoped to this
+   repository alone, and the publish job has to push a formula to another one.
 
 ### Cutting a release
 

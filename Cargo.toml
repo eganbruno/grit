@@ -46,21 +46,26 @@ serde_json = "1.0.151"
 lto = "thin"
 strip = true
 
-# Release engineering, driven by `dist` (https://github.com/axodotdev/cargo-dist).
-# `dist init` reads this and generates .github/workflows/release.yml; see the
-# Releasing section of CONTRIBUTING.md.
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Config for 'dist'
 [workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
+# CI backends to support
 ci = "github"
+# The installers to generate for each app
 installers = ["shell", "homebrew"]
-targets = [
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-gnu",
-]
-# The tap repository that receives the generated formula. Must exist, and the
-# release workflow needs a HOMEBREW_TAP_TOKEN secret with write access to it.
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# A GitHub repo to push Homebrew formulas to
 tap = "eganbruno/homebrew-tap"
+# Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+# Whether to install an updater program
 install-updater = false
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
