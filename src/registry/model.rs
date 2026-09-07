@@ -23,7 +23,7 @@ pub const FORMAT_VERSION: u32 = 1;
 pub enum VcsKind {
     #[default]
     Git,
-    // Dolt,   <- the next one; see CONTRIBUTING.md
+    Dolt,
 }
 
 impl VcsKind {
@@ -31,12 +31,14 @@ impl VcsKind {
     pub const fn program(self) -> &'static str {
         match self {
             VcsKind::Git => "git",
+            VcsKind::Dolt => "dolt",
         }
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
             VcsKind::Git => "git",
+            VcsKind::Dolt => "dolt",
         }
     }
 }

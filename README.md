@@ -1,6 +1,7 @@
 # grit
 
-Work across many git repositories from anywhere, by alias.
+Work across many git and [dolt](https://github.com/dolthub/dolt) repositories
+from anywhere, by alias.
 
 Preparing a release that spans four repos means four `cd`s to answer one
 question and four more to act on the answer. `grit` gives each repo a short
@@ -149,14 +150,24 @@ is not a terminal. `--color always|never|auto` overrides both.
 
 ## How it works
 
-grit shells out to the real `git` binary rather than linking a git library.
-That keeps the dependency tree pure Rust, guarantees your own git config is
+grit shells out to the real `git` and `dolt` binaries rather than linking a
+library. That keeps the dependency tree pure Rust, guarantees your own config is
 honoured, and means the dashboard and the passthrough use one mechanism instead
 of two.
 
-Everything grit does to a repository goes through one trait, `vcs::Vcs`.
-Supporting dolt — or any other git-like system — is one new implementation of
-four methods; no command, renderer or registry code changes.
+Everything grit does to a repository goes through one trait, `vcs::Vcs`, so both
+backends land in the same dashboard and `grit <alias> <args>` passes through to
+whichever binary owns that repo. Registration works out which that is by looking
+at the path, so you never have to say.
+
+The two are read very differently underneath. Git has a machine-readable
+porcelain format; dolt does not, but it is a database, so its readings come from
+the `dolt_*` system tables over `dolt sql`. Where dolt has no equivalent for
+something the dashboard shows, the column is simply quiet — dolt has no detached
+HEAD, and no rebase or bisect state to report.
+
+Supporting another git-like system is one new implementation of four methods; no
+command, renderer or registry code changes.
 
 ## Contributing
 

@@ -11,6 +11,42 @@ use std::process::Command;
 
 use assert_cmd::prelude::*;
 
+/// Where `TestEnv` keeps dolt's global configuration, relative to its root.
+///
+/// Deliberately not named `.dolt`: that would make the directory itself look
+/// like a database to the backend's own detection.
+const DOLT_HOME: &str = "dolt-home";
+
+/// Give dolt a fixed identity, the way [`neutralise_git_config`] does for git.
+///
+/// This has to be dolt's *global* config rather than each repo's: a clone
+/// starts with an empty local config, so an identity written only into the
+/// original leaves `dolt commit` in the clone with no one to attribute to.
+///
+/// Written as a file rather than through `dolt config` so that constructing a
+/// `TestEnv` needs no dolt binary — the git-only tests build one too.
+fn write_dolt_identity(root: &Path) {
+    let dir = root.join(DOLT_HOME).join(".dolt");
+    std::fs::create_dir_all(&dir).expect("create dolt home");
+    std::fs::write(
+        dir.join("config_global.json"),
+        r#"{"user.name":"grit tests","user.email":"tests@grit.invalid"}"#,
+    )
+    .expect("write dolt identity");
+}
+
+/// Whether the `dolt` binary is on `PATH`.
+///
+/// Dolt is not installed on every contributor's machine, so the tests that need
+/// a real database skip themselves rather than failing. CI installs it, which is
+/// where they are guaranteed to run.
+pub fn dolt_available() -> bool {
+    Command::new("dolt")
+        .arg("version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
 pub struct TestEnv {
     /// Kept alive for the lifetime of the test; dropping it deletes everything.
     _dir: tempfile::TempDir,
@@ -25,6 +61,7 @@ impl TestEnv {
         // grit canonicalises compare equal to the ones we hand it.
         let root = dir.path().canonicalize().expect("canonicalize temp dir");
         let config = root.join("config.toml");
+        write_dolt_identity(&root);
         Self {
             _dir: dir,
             root,
@@ -60,6 +97,7 @@ impl TestEnv {
             .env("NO_COLOR", "1")
             .current_dir(&self.root);
         neutralise_git_config(&mut cmd);
+        self.neutralise_dolt_config(&mut cmd);
         cmd
     }
 
@@ -98,6 +136,82 @@ impl TestEnv {
             ],
         );
         path
+    }
+
+    /// Create a dolt database with one table and one commit, and return its
+    /// path.
+    pub fn dolt_repo(&self, name: &str) -> PathBuf {
+        let path = self.root.join(name);
+        std::fs::create_dir_all(&path).expect("create repo dir");
+
+        self.dolt(&path, &["init"]);
+        self.dolt_commit(
+            &path,
+            "create table items (id int primary key, name varchar(64))",
+            "initial commit",
+        );
+        path
+    }
+
+    /// Run some SQL, stage every table, and commit.
+    pub fn dolt_commit(&self, repo: &Path, sql: &str, message: &str) {
+        self.dolt(repo, &["sql", "-q", sql]);
+        self.dolt(repo, &["add", "."]);
+        self.dolt(repo, &["commit", "-m", message]);
+    }
+
+    /// Run some SQL and leave the result unstaged.
+    pub fn dolt_sql(&self, repo: &Path, sql: &str) {
+        self.dolt(repo, &["sql", "-q", sql]);
+    }
+
+    /// Publish `origin` to a file-backed remote and clone it back, so both ends
+    /// have a real upstream to be ahead of or behind.
+    pub fn dolt_clone_of(&self, origin: &Path, name: &str) -> PathBuf {
+        let remote = self.root.join(format!("{name}.remote"));
+        let url = format!("file://{}", remote.display());
+
+        self.dolt(origin, &["remote", "add", "origin", &url]);
+        self.dolt(origin, &["push", "-u", "origin", "main"]);
+
+        let path = self.root.join(name);
+        self.dolt(&self.root, &["clone", &url, path.to_str().unwrap()]);
+        path
+    }
+
+    /// Run dolt in `dir`, panicking with its stderr if it fails.
+    pub fn dolt(&self, dir: &Path, args: &[&str]) -> String {
+        let out = self.dolt_output(dir, args);
+        assert!(
+            out.status.success(),
+            "dolt {args:?} failed in {}:\n{}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Run dolt in `dir` and hand back its output whether or not it succeeded —
+    /// for commands expected to fail, such as a merge staged to conflict.
+    pub fn dolt_output(&self, dir: &Path, args: &[&str]) -> std::process::Output {
+        self.dolt_command(dir, args).output().expect("run dolt")
+    }
+
+    /// A dolt invocation configured for this environment, not yet run.
+    ///
+    /// For the cases that need more than the output — spawning a long-running
+    /// `dolt sql-server`, say.
+    pub fn dolt_command(&self, dir: &Path, args: &[&str]) -> Command {
+        let mut cmd = Command::new("dolt");
+        cmd.current_dir(dir).args(args);
+        self.neutralise_dolt_config(&mut cmd);
+        cmd
+    }
+
+    /// Point dolt at this environment's own global config rather than the
+    /// developer's `~/.dolt`, which holds their identity and credentials.
+    fn neutralise_dolt_config(&self, cmd: &mut Command) {
+        cmd.env("DOLT_ROOT_PATH", self.root.join(DOLT_HOME));
     }
 
     /// Register `path` under `alias`, asserting the command succeeded.

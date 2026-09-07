@@ -27,8 +27,8 @@ pub enum Error {
     )]
     InvalidAlias { alias: String, reason: String },
 
-    #[error("{} is not a {kind} repository", path.display())]
-    NotARepo { path: PathBuf, kind: &'static str },
+    #[error("{} is not a {kinds} repository", path.display())]
+    NotARepo { path: PathBuf, kinds: String },
 
     #[error("{} does not exist", .0.display())]
     PathNotFound(PathBuf),
@@ -68,11 +68,26 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("`{program} {args}` failed with {status}\n{stderr}")]
+    #[error(
+        "could not make sense of `{program}`'s output: {source}\nthis usually means the installed {program} is a different version than grit expects"
+    )]
+    BadOutput {
+        program: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("`{program} {args}` failed with {status}: {stderr}")]
     CommandFailed {
         program: &'static str,
+        /// A short, single-line rendering of the invocation. Long arguments — a
+        /// multi-line SQL query, say — must be summarised rather than pasted:
+        /// `grit status` shows only an error's first line, so a newline in here
+        /// hides everything after it, the backend's own explanation included.
         args: String,
         status: String,
+        /// The backend's explanation, on the same line for that same reason.
+        /// Flatten it with [`crate::vcs::one_line`].
         stderr: String,
     },
 }

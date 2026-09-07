@@ -1,4 +1,4 @@
-//! grit — work across many git repositories from anywhere, by alias.
+//! grit — work across many git and dolt repositories from anywhere, by alias.
 //!
 //! The binary in `main.rs` is a thin wrapper; everything of substance lives
 //! here so it can be unit-tested, and so a future front end (a TUI, say) can

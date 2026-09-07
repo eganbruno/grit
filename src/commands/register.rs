@@ -84,9 +84,21 @@ fn detect_repo(path: &std::path::Path) -> Result<(VcsKind, std::path::PathBuf)> 
 
     Err(Error::NotARepo {
         path: path.to_path_buf(),
-        kind: "git",
+        kinds: known_kinds(),
     }
     .into())
+}
+
+/// Every backend grit could have recognised, as an English list: `dolt or git`.
+///
+/// Read off [`vcs::all_providers`] rather than spelled out, so adding a backend
+/// cannot leave this message claiming grit only understands the old ones.
+fn known_kinds() -> String {
+    vcs::all_providers()
+        .iter()
+        .map(|provider| provider.kind().as_str())
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 pub fn remove(args: &RemoveArgs, ctx: &mut Ctx) -> Result<()> {

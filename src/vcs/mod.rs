@@ -1,7 +1,7 @@
 //! The version-control abstraction.
 //!
 //! Everything grit knows how to do to a repository goes through [`Vcs`]. Adding
-//! support for a new git-like system (dolt, jj, ...) means writing one
+//! support for a new git-like system (jj, hg, ...) means writing one
 //! implementation of this trait and adding a [`VcsKind`] variant — no command,
 //! renderer or registry code has to change.
 //!
@@ -10,6 +10,7 @@
 //! (pagers, credential helpers, hooks), and means the passthrough path and the
 //! status path use one mechanism instead of two.
 
+pub mod dolt;
 pub mod git;
 
 use std::ffi::OsString;
@@ -57,7 +58,8 @@ pub struct Commit {
     /// Abbreviated hash, as git chose to abbreviate it.
     pub short_id: String,
     pub subject: String,
-    /// Compacted relative age, e.g. `28h`. See [`git::compact_relative_time`].
+    /// Compacted relative age, e.g. `28h`. See [`git::compact_relative_time`]
+    /// and [`dolt::compact_age`].
     pub age: String,
 }
 
@@ -114,6 +116,30 @@ pub trait Vcs: Send + Sync {
     }
 }
 
+/// The most of a backend's complaint worth carrying in an error message.
+///
+/// Long enough for a sentence of explanation, short enough that one bad row
+/// cannot stretch the dashboard's columns past the terminal.
+const MAX_STDERR: usize = 200;
+
+/// Squeeze a backend's multi-line complaint onto one bounded line.
+///
+/// `grit status` renders only the first line of an error, so a message that
+/// puts the useful part on line two shows the user nothing at all.
+pub fn one_line(text: &str) -> String {
+    let joined = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    match joined.char_indices().nth(MAX_STDERR) {
+        None => joined,
+        Some((cut, _)) => format!("{}…", joined[..cut].trim_end()),
+    }
+}
+
 /// The backend for a given kind.
 ///
 /// Returns `&'static dyn Vcs` because providers are stateless — they hold no
@@ -121,11 +147,51 @@ pub trait Vcs: Send + Sync {
 pub fn provider_for(kind: VcsKind) -> &'static dyn Vcs {
     match kind {
         VcsKind::Git => &git::GitVcs,
+        VcsKind::Dolt => &dolt::DoltVcs,
     }
 }
 
 /// Every backend, in the order registration should try them when the user does
 /// not say which kind a path is.
+///
+/// Dolt comes first because it is the more specific answer: a dolt database
+/// checked into a git working tree is detected as dolt, which is what someone
+/// registering that directory meant. The reverse order would never see it.
 pub fn all_providers() -> &'static [&'static dyn Vcs] {
-    &[&git::GitVcs]
+    &[&dolt::DoltVcs, &git::GitVcs]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_multi_line_complaint_becomes_one_line() {
+        assert_eq!(one_line("boom\nhint: try again"), "boom; hint: try again");
+    }
+
+    #[test]
+    fn blank_lines_are_dropped_rather_than_joined() {
+        assert_eq!(one_line("boom\n\n\nhint"), "boom; hint");
+    }
+
+    #[test]
+    fn a_single_line_is_left_alone() {
+        assert_eq!(one_line("  no database selected  "), "no database selected");
+    }
+
+    #[test]
+    fn an_enormous_complaint_is_capped() {
+        // One unreadable repo must not stretch the dashboard past the terminal.
+        let flattened = one_line(&"x".repeat(1_000));
+        assert_eq!(flattened.chars().count(), MAX_STDERR + 1);
+        assert!(flattened.ends_with('…'));
+    }
+
+    #[test]
+    fn capping_does_not_split_a_multibyte_character() {
+        // Slicing on a byte index inside a `—` would panic.
+        let flattened = one_line(&"—".repeat(1_000));
+        assert!(flattened.ends_with('…'));
+    }
 }

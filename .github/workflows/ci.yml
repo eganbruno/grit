@@ -40,6 +40,18 @@ jobs:
           git config --global user.name "grit ci"
           git config --global user.email "ci@grit.invalid"
           git config --global init.defaultBranch main
+      # The dolt backend's integration tests drive the real binary and skip
+      # themselves when it is absent, so CI has to supply it or they are
+      # silently vacuous. `dolt version` fails the step if the install did not
+      # take.
+      - name: Install dolt
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install dolt
+          else
+            sudo bash -c 'curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash'
+          fi
+          dolt version
       - run: cargo test --all-features
 
   msrv:
