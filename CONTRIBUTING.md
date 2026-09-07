@@ -34,7 +34,7 @@ src/
   render/         tables, colours, symbols
 tests/
   common/mod.rs   TestEnv — a temp registry and throwaway git repos
-  cli_*.rs        one file per command
+  cli_*.rs        one file per command, plus one per VCS backend
 ```
 
 Two rules keep this honest:
@@ -121,18 +121,55 @@ laptop is running them. See `tests/common/mod.rs` for what it offers.
 
 ## Adding a VCS backend
 
-Dolt is the intended next one, and the shape is already there.
+Two exist: `vcs/git.rs` and `vcs/dolt.rs`. Say you want `jj`.
 
 1. Add the variant to `VcsKind` in `src/registry/model.rs`, and its `program()`
    and `as_str()` arms.
-2. Add `src/vcs/dolt.rs` implementing `Vcs` — four methods: `kind`, `discover`,
+2. Add `src/vcs/jj.rs` implementing `Vcs` — four methods: `kind`, `discover`,
    `snapshot`, `exec`.
 3. List it in `provider_for` and `all_providers` in `src/vcs/mod.rs`.
    `all_providers` is the order registration tries when detecting what a path
-   is, so put the more specific backend first.
+   is, so put the more specific backend first: dolt precedes git so that a
+   database inside a git working tree is registered as the database.
+4. Add `tests/cli_jj.rs`. Backends need the real binary, which not every
+   machine has — follow `cli_dolt.rs` and skip when it is missing, then install
+   it in `ci.yml` so the tests still run somewhere.
 
 Nothing in `commands/`, `render/` or `registry/` should need to change. If it
 does, the abstraction is in the wrong place — say so in the PR.
+
+### What dolt taught us
+
+The trap is assuming a git-like tool is git with a different binary name. Dolt
+borrows git's vocabulary but almost none of its plumbing: no `rev-parse`, no
+porcelain format for `status`, and a `.dolt` directory holding a database rather
+than refs and marker files. A backend written by copying `git.rs` and renaming
+the binary compiles and is wrong at every call site.
+
+So before writing one, find that backend's *stable, machine-readable*
+interface and check each reading against the real tool. For dolt that is SQL —
+the `dolt_*` system tables — which is also why `Error::BadOutput` exists.
+Specifically worth knowing, if only as a flavour of what to look for:
+
+- **Not every column has a source.** Dolt has no detached HEAD and no rebase or
+  bisect state, so some `RepoState` variants are simply unreachable there. Leave
+  them unreachable and say why; do not invent a signal.
+- **Detection needs a positive marker.** `~/.dolt` is dolt's *global config*, so
+  testing for `.dolt` alone reports a home directory as a repository.
+- **Time zones.** `dolt_log.date` is UTC while its `now()` is local; the obvious
+  query makes every age wrong by the machine's offset.
+- **Names are data.** Dolt permits a `'` in a branch name, so anything
+  interpolated into a query has to be escaped.
+- **The same query can answer in two shapes.** When a `dolt sql-server` holds
+  the database, `dolt sql` stops opening it directly and becomes a MySQL client,
+  and the wire protocol renders every value as a string — `"0"` instead of `0`
+  or `false`. Nothing about the command changes, so this is invisible until you
+  test against a repo someone is serving. It is why `vcs/dolt.rs` reads numbers
+  through `wire_u32` rather than as plain `u32`.
+
+The moral of the last one is worth stating plainly: probe a *real* repository,
+not only a freshly created one. Every trap above came from doing that, and the
+server case came from a repository the author was actually using.
 
 ## Style
 

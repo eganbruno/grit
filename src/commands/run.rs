@@ -56,6 +56,12 @@ fn fan_out(repos: &[Repo], args: &[OsString], keep_going: bool, ctx: &Ctx) -> Re
     let mut failed = Vec::new();
 
     for repo in repos {
+        // A blank line before every divider but the first: the child's output
+        // runs right up to the next label otherwise, and three repos' worth of
+        // `git status` becomes one wall of text.
+        if ran > 0 {
+            println!();
+        }
         print!("{}", divider(&repo.alias, ctx.width, ctx.color));
         // The child writes straight to the fd, so our own buffer has to go
         // first or the divider lands after the output it labels.

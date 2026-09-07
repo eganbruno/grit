@@ -119,7 +119,7 @@ fn a_directory_that_is_not_a_repo_is_refused_and_nothing_is_written() {
         .arg(&plain)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("is not a git repository"));
+        .stderr(predicate::str::contains("is not a dolt or git repository"));
 
     assert!(!env.config_exists(), "config should not have been created");
 }

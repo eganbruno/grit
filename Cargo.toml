@@ -6,7 +6,7 @@ edition = "2024"
 # job is what proves this number; do not raise it by hand without checking
 # `cargo metadata` for the real constraint.
 rust-version = "1.87"
-description = "Work across many git repositories from anywhere, by alias."
+description = "Work across many git and dolt repositories from anywhere, by alias."
 authors = ["Bruno Egan <bruno.egan@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eganbruno/grit"

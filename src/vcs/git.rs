@@ -108,7 +108,7 @@ fn capture(path: &Path, args: &[&str]) -> Result<String> {
             program: "git",
             args: args.join(" "),
             status: out.status.to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            stderr: super::one_line(&String::from_utf8_lossy(&out.stderr)),
         });
     }
 

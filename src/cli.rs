@@ -16,8 +16,8 @@ use crate::render::ColorChoice;
 /// The passthrough forms live here because clap cannot list an external
 /// subcommand under `Commands:`, and they are the point of the tool.
 const AFTER_HELP: &str = "\
-Running git in a repo:
-  grit <alias> <args...>   run git in that repo, from anywhere
+Running git or dolt in a repo:
+  grit <alias> <args...>   run the repo's own VCS there, from anywhere
   grit @<tag> <args...>    run it in every repo carrying that tag
 
 Examples:
@@ -33,7 +33,7 @@ Examples:
 #[command(
     name = "grit",
     version,
-    about = "Work across many git repositories from anywhere, by alias.",
+    about = "Work across many repositories from anywhere, by alias.",
     after_help = AFTER_HELP,
     disable_help_subcommand = true,
     subcommand_negates_reqs = true
