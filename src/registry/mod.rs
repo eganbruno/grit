@@ -28,6 +28,7 @@ pub const RESERVED_ALIASES: &[&str] = &[
     "remove",
     "rm",
     "run",
+    "shell",
     "show",
     "status",
     "version",

@@ -17,13 +17,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::registry::VcsKind;
 
 /// A point-in-time reading of one repository, everything the dashboard needs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Snapshot {
     /// `None` when HEAD is detached.
     pub branch: Option<String>,
@@ -53,7 +53,7 @@ impl Snapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commit {
     /// Abbreviated hash, as git chose to abbreviate it.
     pub short_id: String,
@@ -64,7 +64,7 @@ pub struct Commit {
 }
 
 /// What the repository is in the middle of, if anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RepoState {
     #[default]
@@ -115,6 +115,11 @@ pub trait Vcs: Send + Sync {
         self.discover(path).is_some()
     }
 }
+
+/// Seconds-to-`4h`, which is not really dolt's despite living there: the
+/// backend that had to do the arithmetic itself is simply where it was written.
+/// Anything holding a timestamp rather than a phrase wants it.
+pub use dolt::compact_age;
 
 /// The most of a backend's complaint worth carrying in an error message.
 ///

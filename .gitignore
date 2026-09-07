@@ -1,2 +1,5 @@
 /target
 .DS_Store
+
+# The pty harness under tests/shell/ is run directly.
+__pycache__/

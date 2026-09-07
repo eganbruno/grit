@@ -28,13 +28,16 @@ src/
   cli.rs          clap types, and nothing else
   context.rs      Ctx — the registry, colour and terminal width
   error.rs        Error, the library's typed error
+  cache.rs        the last dashboard read, so one can be shown instantly
   commands/       one file per command; the only layer that prints
   registry/       the set of registered repos and its file on disk
   vcs/            the Vcs trait and its backends
   render/         tables, colours, symbols
+  shell/          the integration scripts, embedded with include_str!
 tests/
   common/mod.rs   TestEnv — a temp registry and throwaway git repos
   cli_*.rs        one file per command, plus one per VCS backend
+  shell/          a pty harness for the integrations; run by hand
 ```
 
 Two rules keep this honest:
@@ -118,6 +121,48 @@ fn fetches_every_registered_repo() {
 `TestEnv` gives each test its own temporary registry and real git repositories,
 with the machine's git config neutralised so results do not depend on whose
 laptop is running them. See `tests/common/mod.rs` for what it offers.
+
+## Working on the shell integration
+
+`grit shell init <shell>` prints a script from `src/shell/`, embedded with
+`include_str!`. They are kept as real `.zsh`/`.bash`/`.fish` files so an editor,
+a linter and a reviewer all see shell code, and so `tests/cli_shell.rs` can run
+`zsh -n` over what actually ships. That test skips when the shell is missing, so
+check the skip notices before believing a green run.
+
+The zsh script draws the dashboard *below the line you are typing*, which is a
+different problem from printing it:
+
+- The text lives in zsh's `POSTDISPLAY`, which is rendered literally. **ANSI in
+  there appears on screen as `ESC [ 3 6 m`.** Colour has to go across as
+  `region_highlight` ranges instead, which is why `grit shell preview` emits
+  plain text and a list of offsets rather than a painted table.
+- Those offsets are **characters**. Not bytes — a branch name with an accent in
+  it would shift everything after it — and not display columns, which a CJK
+  commit subject would break. `Table::render_highlighted` counts `chars()`, and
+  the tests slice the text with the offsets to prove it.
+- The preview has to be instant, so it renders `cache.rs` and never opens a
+  repository. The integration starts a throttled `grit shell refresh` behind it.
+- The idle timer is `zsh/sched`. `TMOUT` looks like the obvious answer and is
+  not: it can only be armed when a line read *begins*, so it cannot be turned on
+  when the buffer becomes the trigger, and merely defining a `TRAPALRM` to go
+  with it silently disables a user's auto-logout.
+
+If you change anything under `src/shell/`, run it against a real interactive
+shell rather than reading it and believing yourself:
+
+```bash
+cargo build && python3 tests/shell/preview.py
+```
+
+That types into zsh, bash and fish on a pseudo-terminal and asserts against the
+bytes they write back — the table appears, the colours land on the right cells,
+a keystroke erases it, Ctrl-C strands nothing, and a user who already has
+`TMOUT` set keeps their auto-logout. It is not part of `cargo test` because it
+waits on a one-second timer several times and would flake on a loaded runner;
+that is a reason to run it by hand, not a reason to skip it. Nearly every bug
+this feature had was of the kind where the script reads correctly and the
+screen is wrong, and nothing but a terminal will show you those.
 
 ## Adding a VCS backend
 

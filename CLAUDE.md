@@ -8,14 +8,15 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 186 tests, ~15s
+cargo test                                   # 229 tests, ~17s
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
 ```
 
 Always use `GRIT_CONFIG` when running grit manually. Without it you are
-mutating the user's real `~/.config/grit/config.toml`.
+mutating the user's real `~/.config/grit/config.toml`. `GRIT_CACHE` does the
+same for the status cache.
 
 ## Invariants worth not breaking
 
@@ -55,6 +56,38 @@ mutating the user's real `~/.config/grit/config.toml`.
     Plain `u32` fields there compile and then fail on any developer who happens
     to be running a server
 
+## The preview at the prompt
+
+`grit shell init zsh` emits a ZLE integration that draws the dashboard under the
+line you are typing. Four things hold it up, and each is easy to undo:
+
+- **The preview must not run git.** It renders `src/cache.rs`, which every
+  unfiltered `grit status` refills on its way out. A preview that took a live
+  reading would block the line editor for as long as the slowest repo.
+- **A cache that is subtly wrong is worse than no cache.** `StatusCache::matches`
+  compares the cached rows against the live registry and rejects the whole file
+  on any difference. Loosening that to "close enough" puts a row for a repo you
+  removed on screen. `--max-age` is the same rule in the time dimension: a
+  reading old enough to mislead is withheld and a refresh is started instead.
+- **The preview carries no ANSI.** zsh is holding the table in `POSTDISPLAY` and
+  renders it literally, so an escape shows up as the characters `ESC [ 3 6 m`.
+  Colour goes across as `region_highlight` ranges instead — *character* offsets,
+  not bytes and not display columns — which is what `Table::render_highlighted`
+  and `theme::zsh_style` exist for. `tests/cli_shell.rs` slices the text with
+  the offsets it was given, because an off-by-one is invisible in the output.
+- **The timer is `zsh/sched`, not `TMOUT`.** `src/shell/grit.zsh` says why at
+  length; the short version is that a sched entry can be armed and cancelled
+  part-way through a line where TMOUT cannot, so the shell runs no timer at all
+  except in the second after the trigger is typed — and grit never touches
+  TMOUT or TRAPALRM, so it cannot disable anyone's auto-logout.
+
+Only `grit status` with no alias and no `--tag` writes the cache. A filtered run
+cached as if it were everything leaves repos silently absent from the preview,
+which reads as "clean" rather than as "not looked at".
+
+The zsh script's comments are load-bearing. Nearly every line with one attached
+is there because the obvious version was measured and found to be wrong.
+
 ## Rendering
 
 The intended aesthetic is fzf-like: aligned columns, colour for meaning, no
@@ -62,7 +95,11 @@ box-drawing. Before changing the table:
 
 - widths are measured with `unicode-width`, not `str::len`
 - cells hold styled *spans*, and styling is applied at render time — that is
-  what makes truncation safe. Never bake ANSI into a cell's text.
+  what makes truncation safe, and it is also the only reason the shell preview
+  can exist. Never bake ANSI into a cell's text.
+- `Table::lines` is the single layout path; `render` and `render_highlighted`
+  are two consumers of it. Adding a third renderer means another consumer, not
+  another copy of the alignment code.
 - colour must be off when stdout is not a terminal or `NO_COLOR` is set; the
   integration tests assert this.
 
@@ -79,6 +116,15 @@ change what the tests see.
 ## Not yet built
 
 Interactive TUI, shell completions, `grit clone`.
+
+bash and fish get `^G` rather than the idle preview: neither fires a hook while
+you sit at the prompt. Not quite a dead end for fish — a self-armed background
+timer sending `SIGUSR1` to an `--on-signal` handler does run while its reader is
+blocked — but that is a spawned sleeper process per prompt to reach what zsh
+does with a builtin, and it is not built.
+
+`tests/shell/preview.py` drives all three in a pty and is not part of `cargo
+test`; it is timing-dependent. Run it after touching `src/shell/`.
 
 `tests/cli_dolt.rs` needs the real `dolt` binary and skips itself when it is
 absent, so a green local run does not necessarily mean those ran — CI installs

@@ -8,6 +8,7 @@
 //!
 //! | module | responsibility |
 //! |---|---|
+//! | [`cache`] | the last dashboard read, so one can be shown instantly |
 //! | [`cli`] | the command-line grammar, and nothing else |
 //! | [`commands`] | one file per command; the only layer that prints |
 //! | [`registry`] | the set of registered repos, and its file on disk |
@@ -17,6 +18,7 @@
 //! Dependencies point downwards only: `commands` uses `registry`, `vcs` and
 //! `render`; none of those three know about each other or about `commands`.
 
+pub mod cache;
 pub mod cli;
 pub mod commands;
 pub mod context;

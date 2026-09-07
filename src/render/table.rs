@@ -10,7 +10,11 @@
 //!   column is the one that shrinks, and its text is truncated with an ellipsis
 //!
 //! Styling is applied at render time rather than baked into the strings, which
-//! is what makes truncation safe: we never cut through an ANSI escape.
+//! is what makes truncation safe: we never cut through an ANSI escape. It also
+//! means layout can be shared by two renderers — [`Table::render`], which
+//! paints, and [`Table::render_highlighted`], which hands the caller plain text
+//! plus the ranges that were going to be coloured. The second exists for shells
+//! that colour a region of their own buffer rather than reading escapes.
 
 use owo_colors::Style;
 use unicode_width::UnicodeWidthStr;
@@ -91,25 +95,21 @@ impl Cell {
         self.spans.iter().map(|s| s.text.as_str()).collect()
     }
 
-    /// Render, optionally truncated to `max` display columns.
+    /// The spans that survive truncation to `max` display columns.
     ///
     /// Truncation walks spans and then characters, so it stops on a character
     /// boundary and leaves room for the ellipsis.
-    fn render(&self, color: bool, max: Option<usize>) -> String {
+    fn visible_spans(&self, max: Option<usize>) -> Vec<Span> {
         let Some(max) = max.filter(|&m| self.width() > m) else {
-            return self
-                .spans
-                .iter()
-                .map(|s| paint(&s.text, s.style, color))
-                .collect();
+            return self.spans.clone();
         };
 
         if max == 0 {
-            return String::new();
+            return Vec::new();
         }
 
         let budget = max.saturating_sub(symbol::ELLIPSIS.width());
-        let mut out = String::new();
+        let mut out = Vec::new();
         let mut used = 0;
 
         for span in &self.spans {
@@ -126,11 +126,17 @@ impl Cell {
                 used += w;
             }
             if !taken.is_empty() {
-                out.push_str(&paint(&taken, span.style, color));
+                out.push(Span {
+                    text: taken,
+                    style: span.style,
+                });
             }
         }
 
-        out.push_str(&paint(symbol::ELLIPSIS, Theme::muted(), color));
+        out.push(Span {
+            text: symbol::ELLIPSIS.to_string(),
+            style: Theme::muted(),
+        });
         out
     }
 
@@ -290,6 +296,65 @@ impl Table {
 
     /// Render the whole table, including a trailing newline per line.
     pub fn render(&self) -> String {
+        let mut out = String::new();
+        for line in self.lines() {
+            for span in &line {
+                out.push_str(&paint(&span.text, span.style, self.color));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// The same table as plain text, plus the ranges that carry a style.
+    ///
+    /// Offsets are counted in *characters* — not bytes, and not display
+    /// columns — because the one consumer is zsh's `region_highlight`, which
+    /// indexes the line editor's buffer that way. Nothing is painted: the shell
+    /// is holding the text in a variable and does its own colouring, which is
+    /// the only way to tint something the terminal has not printed yet.
+    ///
+    /// Ranges are half-open (`start..end`) and never overlap. Unstyled runs —
+    /// padding, gaps, the indent — produce no range at all.
+    pub fn render_highlighted(&self) -> (String, Vec<Highlight>) {
+        let mut text = String::new();
+        let mut ranges: Vec<Highlight> = Vec::new();
+        let mut at = 0;
+
+        for line in self.lines() {
+            for span in line {
+                let start = at;
+                at += span.text.chars().count();
+                text.push_str(&span.text);
+
+                if span.style == Style::new() || span.text.is_empty() {
+                    continue;
+                }
+                // Adjacent runs of one style are one range, which keeps the
+                // list short enough for a shell to loop over.
+                match ranges.last_mut() {
+                    Some(last) if last.end == start && last.style == span.style => {
+                        last.end = at;
+                    }
+                    _ => ranges.push(Highlight {
+                        start,
+                        end: at,
+                        style: span.style,
+                    }),
+                }
+            }
+            text.push('\n');
+            at += 1;
+        }
+
+        (text, ranges)
+    }
+
+    /// Every line of the table, as the styled spans it is laid out from.
+    ///
+    /// The single layout path. Both renderers consume this, so a change to
+    /// alignment or truncation cannot make them disagree.
+    fn lines(&self) -> Vec<Vec<Span>> {
         let widths = self.fitted_widths();
         let flex_idx = self.columns.iter().position(|c| c.flex);
         let cap = |i: usize| {
@@ -300,7 +365,7 @@ impl Table {
             }
         };
 
-        let mut out = String::new();
+        let mut out = Vec::new();
 
         // Header row, in the same column geometry as the body.
         let header_cells: Vec<Cell> = self
@@ -308,63 +373,89 @@ impl Table {
             .iter()
             .map(|c| Cell::styled(c.header.to_uppercase(), Theme::header()))
             .collect();
-        out.push_str(&self.render_line(&header_cells, &widths, cap));
+        out.push(self.line_spans(&header_cells, &widths, &cap));
 
         if self.rule {
             let span: usize = widths.iter().sum::<usize>() + GAP * widths.len().saturating_sub(1);
-            let rule = symbol::RULE.repeat(span);
-            out.push_str(INDENT);
-            out.push_str(&paint(&rule, Theme::rule(), self.color));
-            out.push('\n');
+            out.push(vec![
+                unstyled(INDENT),
+                Span {
+                    text: symbol::RULE.repeat(span),
+                    style: Theme::rule(),
+                },
+            ]);
         }
 
         for row in &self.rows {
-            out.push_str(&self.render_line(row, &widths, cap));
+            out.push(self.line_spans(row, &widths, &cap));
         }
 
         out
     }
 
-    fn render_line(
+    fn line_spans(
         &self,
         cells: &[Cell],
         widths: &[usize],
-        cap: impl Fn(usize) -> Option<usize>,
-    ) -> String {
-        let mut line = String::from(INDENT);
+        cap: &impl Fn(usize) -> Option<usize>,
+    ) -> Vec<Span> {
+        let mut line = vec![unstyled(INDENT)];
 
         for (i, col) in self.columns.iter().enumerate() {
             let empty = Cell::empty();
             let cell = cells.get(i).unwrap_or(&empty);
             let max = cap(i);
-            let body = cell.render(self.color, max);
-            let pad = widths[i].saturating_sub(cell.rendered_width(max));
+            let pad = " ".repeat(widths[i].saturating_sub(cell.rendered_width(max)));
 
             match col.align {
                 Align::Left => {
-                    line.push_str(&body);
+                    line.extend(cell.visible_spans(max));
                     if i + 1 < self.columns.len() {
-                        line.push_str(&" ".repeat(pad));
+                        line.push(unstyled(&pad));
                     }
                 }
                 Align::Right => {
-                    line.push_str(&" ".repeat(pad));
-                    line.push_str(&body);
+                    line.push(unstyled(&pad));
+                    line.extend(cell.visible_spans(max));
                 }
             }
 
             if i + 1 < self.columns.len() {
-                line.push_str(&" ".repeat(GAP));
+                line.push(unstyled(&" ".repeat(GAP)));
             }
         }
 
         // Left-aligned final columns pad to their width; nothing follows, so
         // trim it back off rather than shipping trailing whitespace.
-        while line.ends_with(' ') {
-            line.pop();
+        while let Some(last) = line.last_mut() {
+            while last.text.ends_with(' ') {
+                last.text.pop();
+            }
+            if last.text.is_empty() {
+                line.pop();
+            } else {
+                break;
+            }
         }
-        line.push('\n');
+
         line
+    }
+}
+
+/// A run of the rendered table that carries a style, as character offsets into
+/// the text [`Table::render_highlighted`] returned alongside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Highlight {
+    pub start: usize,
+    /// One past the last character, so `end - start` is the length.
+    pub end: usize,
+    pub style: Style,
+}
+
+fn unstyled(text: &str) -> Span {
+    Span {
+        text: text.to_string(),
+        style: Style::new(),
     }
 }
 
@@ -380,6 +471,14 @@ pub fn paint(text: &str, style: Style, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What one cell contributes to a line, truncated to `max` columns.
+    fn truncated(cell: &Cell, max: usize) -> String {
+        cell.visible_spans(Some(max))
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect()
+    }
 
     fn table() -> Table {
         let mut t = Table::new(["alias", "branch"]).color(false);
@@ -501,8 +600,7 @@ mod tests {
 
     #[test]
     fn truncation_never_splits_a_wide_character() {
-        let cell = Cell::plain("日本語です");
-        let rendered = cell.render(false, Some(5));
+        let rendered = truncated(&Cell::plain("日本語です"), 5);
         // 5 columns: two glyphs (4 cols) plus the ellipsis.
         assert_eq!(rendered, "日本…");
         assert!(rendered.width() <= 5);
@@ -511,14 +609,128 @@ mod tests {
     #[test]
     fn truncation_spans_style_boundaries() {
         let cell = Cell::plain("abc").push("defghi", Style::new());
-        assert_eq!(cell.render(false, Some(5)), "abcd…");
+        assert_eq!(truncated(&cell, 5), "abcd…");
+    }
+
+    /// The characters a highlight covers, which is the only thing that makes
+    /// an offset bug visible.
+    fn covered(text: &str, h: &Highlight) -> String {
+        text.chars().skip(h.start).take(h.end - h.start).collect()
+    }
+
+    #[test]
+    fn the_highlighted_text_is_what_the_uncoloured_table_renders() {
+        let (text, _) = table().render_highlighted();
+        assert_eq!(text, table().color(false).render());
+    }
+
+    #[test]
+    fn offsets_are_characters_not_bytes() {
+        // `日本語` is 3 characters, 9 bytes and 6 display columns; a renderer
+        // that reported any of the other two would send zsh's region_highlight
+        // to the wrong place.
+        let mut t = Table::new(["branch"]).no_rule();
+        t.push_row(vec![Cell::styled("日本語", Theme::branch())]);
+
+        let (text, ranges) = t.render_highlighted();
+        let branch = ranges
+            .iter()
+            .find(|h| h.style == Theme::branch())
+            .expect("the branch cell is styled");
+
+        assert_eq!(covered(&text, branch), "日本語");
+        assert_eq!(branch.end - branch.start, 3);
+    }
+
+    #[test]
+    fn a_highlight_lands_on_its_own_cell_and_no_further() {
+        let mut t = Table::new(["alias", "branch"]).no_rule();
+        t.push_row(vec![
+            Cell::styled("dashboard", Theme::alias()),
+            Cell::styled("main", Theme::branch()),
+        ]);
+
+        let (text, ranges) = t.render_highlighted();
+        for want in ["dashboard", "main"] {
+            let style = if want == "main" {
+                Theme::branch()
+            } else {
+                Theme::alias()
+            };
+            let found = ranges.iter().find(|h| h.style == style).unwrap();
+            assert_eq!(covered(&text, found), want);
+        }
+    }
+
+    #[test]
+    fn padding_and_gaps_carry_no_highlight() {
+        let mut t = Table::new(["alias", "branch"]).no_rule();
+        t.push_row(vec![Cell::plain("api"), Cell::plain("main")]);
+
+        let (_, ranges) = t.render_highlighted();
+        // Only the header is styled; the two plain cells and every space
+        // between them are left alone.
+        assert!(
+            ranges.iter().all(|h| h.style == Theme::header()),
+            "unstyled text produced {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn adjacent_runs_of_one_style_become_a_single_range() {
+        // `↑2 ↓5` is three spans — two styled, one plain space — so it stays
+        // three ranges; `↑2 ↑5` sharing a style would still not merge, because
+        // the space between them breaks the run. Two touching spans do merge.
+        let cell = Cell::styled("ab", Theme::sha()).push("cd", Theme::sha());
+        let mut t = Table::new(["x"]).no_rule();
+        t.push_row(vec![cell]);
+
+        let (text, ranges) = t.render_highlighted();
+        let sha: Vec<_> = ranges.iter().filter(|h| h.style == Theme::sha()).collect();
+        assert_eq!(sha.len(), 1);
+        assert_eq!(covered(&text, sha[0]), "abcd");
+    }
+
+    #[test]
+    fn every_line_ends_with_a_newline_the_offsets_account_for() {
+        let (text, ranges) = table().render_highlighted();
+        assert!(text.ends_with('\n'));
+        for h in &ranges {
+            assert!(
+                !covered(&text, h).contains('\n'),
+                "{h:?} spans a line break"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_cell_highlights_only_what_survived() {
+        let mut t = Table::new(["alias", "subject"])
+            .flex(1)
+            .no_rule()
+            .terminal_width(Some(20));
+        t.push_row(vec![
+            Cell::plain("api"),
+            Cell::styled("a rather long commit subject", Theme::subject().bold()),
+        ]);
+
+        let (text, ranges) = t.render_highlighted();
+        let subject = ranges
+            .iter()
+            .find(|h| h.style == Theme::subject().bold())
+            .unwrap();
+        assert!(text.contains(&covered(&text, subject)));
+        assert!(!covered(&text, subject).contains(symbol::ELLIPSIS));
     }
 
     #[test]
     fn colour_is_off_by_default_and_adds_escapes_when_on() {
-        let plain = Cell::styled("main", Theme::branch()).render(false, None);
-        let fancy = Cell::styled("main", Theme::branch()).render(true, None);
-        assert_eq!(plain, "main");
+        let mut t = Table::new(["branch"]).no_rule();
+        t.push_row(vec![Cell::styled("main", Theme::branch())]);
+
+        let plain = t.clone().color(false).render();
+        let fancy = t.color(true).render();
+        assert!(plain.contains("main") && !plain.contains('\u{1b}'));
         assert!(
             fancy.contains('\u{1b}'),
             "expected ANSI escapes in {fancy:?}"

@@ -294,3 +294,130 @@ fn a_narrow_terminal_truncates_rather_than_wrapping() {
     }
     assert!(stdout.contains('…'), "expected truncation in:\n{stdout}");
 }
+
+#[test]
+fn a_cold_cache_says_so_rather_than_showing_a_blank_table() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &[]);
+
+    // Failing rather than printing `[]` is what lets a script tell "nothing
+    // registered" apart from "nothing read yet".
+    env.grit()
+        .args(["status", "--cached"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("run `grit status`"));
+}
+
+#[test]
+fn the_cached_dashboard_runs_no_git_at_all() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &[]);
+    env.grit().arg("status").assert().success();
+
+    // An empty PATH is the proof: grit finds its backends there and nowhere
+    // else, so a reading taken here could only have come from the cache.
+    let out = env
+        .grit()
+        .env("PATH", "")
+        .args(["status", "--cached"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", describe(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(row(&stdout, "api")[1], "main", "{stdout}");
+    assert!(stdout.contains("initial commit"), "{stdout}");
+}
+
+#[test]
+fn the_cached_footer_says_how_old_the_reading_is() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &[]);
+    env.grit().arg("status").assert().success();
+
+    env.grit()
+        .args(["status", "--cached"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(" ago"));
+}
+
+#[test]
+fn cached_json_is_the_same_document_as_live_json() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &[]);
+    env.register("docs", &env.repo("docs"), &[]);
+
+    let live = env.grit().args(["status", "--json"]).output().unwrap();
+    let cached = env
+        .grit()
+        .args(["status", "--json", "--cached"])
+        .output()
+        .unwrap();
+
+    // Byte-identical, not merely similar: the commit age is a string taken at
+    // read time, so a cache that re-derived anything would show here.
+    assert_eq!(
+        String::from_utf8_lossy(&live.stdout),
+        String::from_utf8_lossy(&cached.stdout)
+    );
+}
+
+#[test]
+fn a_filtered_run_does_not_pass_itself_off_as_the_whole_dashboard() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &["release"]);
+    env.register("docs", &env.repo("docs"), &[]);
+
+    env.grit()
+        .args(["status", "--tag", "release"])
+        .assert()
+        .success();
+
+    // Caching that would leave `docs` silently missing from every later
+    // preview, which reads as "clean" rather than as "not looked at".
+    assert!(!env.cache_exists(), "a filtered run wrote the cache");
+}
+
+#[test]
+fn the_cache_can_be_narrowed_the_same_way_the_live_dashboard_can() {
+    let env = TestEnv::new();
+    env.register("api", &env.repo("api"), &["release"]);
+    env.register("docs", &env.repo("docs"), &[]);
+    env.grit().arg("status").assert().success();
+
+    let out = env
+        .grit()
+        .args(["status", "--cached", "--tag", "release"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(stdout.contains("api"), "{stdout}");
+    assert!(!stdout.contains("docs"), "{stdout}");
+}
+
+#[test]
+fn moving_a_repo_invalidates_the_cache_rather_than_reporting_the_old_place() {
+    let env = TestEnv::new();
+    let repo = env.repo("api");
+    env.register("api", &repo, &[]);
+    env.grit().arg("status").assert().success();
+
+    let moved = env.root().join("moved");
+    std::fs::rename(&repo, &moved).unwrap();
+    env.grit()
+        .args(["-r", "api"])
+        .arg(&moved)
+        .arg("--force")
+        .assert()
+        .success();
+
+    env.grit()
+        .args(["status", "--cached"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty());
+}

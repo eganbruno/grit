@@ -125,6 +125,51 @@ impl Theme {
     }
 }
 
+/// How zsh should paint text grit styled this way, if it can.
+///
+/// The shell integration hands zsh the dashboard as plain text plus a list of
+/// ranges, and zsh colours them itself through `region_highlight`. That takes
+/// a highlight spec rather than ANSI, and the spec vocabulary is smaller than
+/// what ANSI can say: `fg=`, `bg=`, `bold`, `underline`, `standout`, and no dim
+/// attribute at all. Dimmed text therefore becomes grey 8 — the colour
+/// zsh-autosuggestions uses for exactly this job.
+///
+/// A style with no entry simply goes unpainted, so adding one to [`Theme`] and
+/// forgetting it here costs colour, not correctness.
+pub fn zsh_style(style: Style) -> Option<&'static str> {
+    if style == Style::new() {
+        return None;
+    }
+    ZSH_STYLES
+        .iter()
+        .find(|(named, _)| named() == style)
+        .map(|(_, spec)| *spec)
+}
+
+/// Every named style paired with its zsh spelling.
+///
+/// Function pointers because [`Style`]'s constructors are not `const`. Matching
+/// is by equality, so styles that happen to be identical — `header` and `muted`
+/// are both dimmed — resolve to whichever comes first. That is harmless: they
+/// are the same instruction to zsh as well.
+type ZshStyle = (fn() -> Style, &'static str);
+
+static ZSH_STYLES: &[ZshStyle] = &[
+    (Theme::header, "fg=8"),
+    (Theme::rule, "fg=238"),
+    (Theme::alias, "bold"),
+    (Theme::branch, "fg=cyan"),
+    (Theme::detached, "fg=magenta"),
+    (Theme::sha, "fg=yellow"),
+    (Theme::kind, "fg=blue"),
+    (Theme::ok, "fg=green"),
+    (Theme::behind, "fg=red"),
+    (Theme::untracked, "fg=blue"),
+    (Theme::conflict, "fg=red,bold"),
+    (Theme::stash, "fg=magenta"),
+    (Theme::banner, "fg=cyan,bold"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +178,31 @@ mod tests {
     fn always_and_never_ignore_the_terminal() {
         assert!(ColorChoice::Always.enabled_for(false));
         assert!(!ColorChoice::Never.enabled_for(true));
+    }
+
+    #[test]
+    fn every_named_style_has_a_zsh_spelling() {
+        for (named, spec) in ZSH_STYLES {
+            assert_eq!(zsh_style(named()), Some(*spec));
+        }
+    }
+
+    #[test]
+    fn styles_that_are_the_same_colour_share_a_spelling() {
+        // Not an accident worth guarding against — several columns are yellow
+        // on purpose — but the lookup must not depend on which one asked.
+        for style in [Theme::sha(), Theme::ahead(), Theme::unstaged()] {
+            assert_eq!(zsh_style(style), Some("fg=yellow"));
+        }
+        for style in [Theme::header(), Theme::muted(), Theme::path()] {
+            assert_eq!(zsh_style(style), Some("fg=8"));
+        }
+    }
+
+    #[test]
+    fn unstyled_text_asks_zsh_for_nothing() {
+        assert_eq!(zsh_style(Theme::subject()), None);
+        assert_eq!(zsh_style(Style::new()), None);
     }
 
     #[test]

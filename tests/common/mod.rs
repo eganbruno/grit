@@ -52,6 +52,7 @@ pub struct TestEnv {
     _dir: tempfile::TempDir,
     root: PathBuf,
     config: PathBuf,
+    cache: PathBuf,
 }
 
 impl TestEnv {
@@ -61,11 +62,13 @@ impl TestEnv {
         // grit canonicalises compare equal to the ones we hand it.
         let root = dir.path().canonicalize().expect("canonicalize temp dir");
         let config = root.join("config.toml");
+        let cache = root.join("status-cache.json");
         write_dolt_identity(&root);
         Self {
             _dir: dir,
             root,
             config,
+            cache,
         }
     }
 
@@ -85,14 +88,26 @@ impl TestEnv {
         self.config.exists()
     }
 
+    /// Where this environment's status cache lives. Inside the temp directory,
+    /// so a test run never touches the developer's real one.
+    pub fn cache(&self) -> &Path {
+        &self.cache
+    }
+
+    pub fn cache_exists(&self) -> bool {
+        self.cache.exists()
+    }
+
     /// A `grit` invocation pointed at this environment's registry.
     ///
     /// `COLUMNS` is pinned so column widths do not depend on the terminal the
-    /// suite happens to run in, and the git config files are neutralised so a
+    /// suite happens to run in, `GRIT_CACHE` keeps the status cache inside the
+    /// temp directory, and the git config files are neutralised so a
     /// developer's own `~/.gitconfig` cannot change what git prints.
     pub fn grit(&self) -> Command {
         let mut cmd = Command::cargo_bin("grit").expect("built binary");
         cmd.env("GRIT_CONFIG", &self.config)
+            .env("GRIT_CACHE", &self.cache)
             .env("COLUMNS", "200")
             .env("NO_COLOR", "1")
             .current_dir(&self.root);
