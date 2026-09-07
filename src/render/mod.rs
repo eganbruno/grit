@@ -6,8 +6,8 @@
 pub mod table;
 pub mod theme;
 
-pub use table::{Align, Cell, Table, paint};
-pub use theme::{ColorChoice, Theme, symbol};
+pub use table::{Align, Cell, Highlight, Table, paint};
+pub use theme::{ColorChoice, Theme, symbol, zsh_style};
 
 use owo_colors::Style;
 

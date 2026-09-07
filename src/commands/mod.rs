@@ -14,6 +14,7 @@
 
 pub mod register;
 pub mod run;
+pub mod shell;
 pub mod show;
 pub mod status;
 
@@ -31,6 +32,7 @@ pub fn dispatch(cli: &Cli, ctx: &mut Ctx) -> Result<i32> {
         Some(Command::Remove(args)) => register::remove(args, ctx).map(|_| 0),
         Some(Command::Show(args)) => show::run(args, ctx).map(|_| 0),
         Some(Command::Status(args)) => status::run(args, ctx),
+        Some(Command::Shell(args)) => shell::run(args, ctx),
         Some(Command::External(argv)) => run::run(argv, cli.keep_going, ctx),
         None => {
             Cli::command().print_help()?;

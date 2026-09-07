@@ -4,20 +4,59 @@
 //! is the slowest repo rather than the sum. Nothing is shared mutably between
 //! threads, so a scoped spawn is all the machinery needed — no channels, no
 //! locks, no async runtime.
+//!
+//! Concurrent is still not *instant*, which is why every unfiltered run leaves
+//! its readings in [`crate::cache`] on the way out. `--cached` renders those
+//! and runs nothing, and that is what makes the shell integration possible.
 
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::cache::{CachedRow, StatusCache, cache_path};
 use crate::cli::StatusArgs;
 use crate::context::Ctx;
-use crate::registry::{Repo, abbreviate_home};
+use crate::registry::{Repo, RepoEntry, abbreviate_home};
 use crate::render::{Align, Cell, Table, Theme, footer, plural, symbol};
 use crate::vcs::{self, RepoState, Snapshot};
 
 /// One repo's reading, or why it could not be read.
-struct Row {
-    repo: Repo,
-    outcome: Result<Snapshot, String>,
+pub(crate) struct Row {
+    pub repo: Repo,
+    pub outcome: Result<Snapshot, String>,
+}
+
+impl Row {
+    fn to_cached(&self) -> CachedRow {
+        CachedRow {
+            alias: self.repo.alias.clone(),
+            path: self.repo.path().to_path_buf(),
+            kind: self.repo.kind(),
+            tags: self.repo.entry.tags.clone(),
+            snapshot: self.outcome.as_ref().ok().cloned(),
+            error: self.outcome.as_ref().err().cloned(),
+        }
+    }
+
+    /// `added_at` is registry bookkeeping that never reaches the table or the
+    /// JSON, so the cache does not carry it and this does not invent one.
+    fn from_cached(row: &CachedRow) -> Self {
+        Self {
+            repo: Repo {
+                alias: row.alias.clone(),
+                entry: RepoEntry {
+                    path: row.path.clone(),
+                    kind: row.kind,
+                    tags: row.tags.clone(),
+                    added_at: None,
+                },
+            },
+            outcome: match (&row.snapshot, &row.error) {
+                (Some(snap), _) => Ok(snap.clone()),
+                (None, Some(err)) => Err(err.clone()),
+                (None, None) => Err("no reading was cached".to_string()),
+            },
+        }
+    }
 }
 
 pub fn run(args: &StatusArgs, ctx: &mut Ctx) -> Result<i32> {
@@ -32,12 +71,35 @@ pub fn run(args: &StatusArgs, ctx: &mut Ctx) -> Result<i32> {
         return Ok(0);
     }
 
-    let rows = collect(repos);
+    let (rows, note) = if args.cached {
+        match read_cache(ctx) {
+            Some(cache) => (
+                select_cached(&cache, &repos),
+                Some(format!("{} ago", cache.age())),
+            ),
+            None => {
+                // Not an empty dashboard — no dashboard. Printing `[]` here
+                // would leave a script unable to tell "nothing registered"
+                // from "nothing read yet", so say nothing and fail instead.
+                eprintln!("no usable cached status — run `grit status` to take a reading");
+                return Ok(1);
+            }
+        }
+    } else {
+        let rows = collect(repos);
+        // Keep the preview warm from ordinary use. Only an unfiltered run,
+        // because a subset cached as if it were everything would show a
+        // dashboard with repos silently missing from it.
+        if args.aliases.is_empty() && args.tag.is_none() {
+            write_cache(ctx, &rows);
+        }
+        (rows, None)
+    };
 
     if args.json {
         print_json(&rows)?;
     } else {
-        print_table(&rows, ctx);
+        print_table(&rows, ctx, note);
     }
 
     // A repo we could not read at all is a real failure; a repo whose directory
@@ -46,8 +108,43 @@ pub fn run(args: &StatusArgs, ctx: &mut Ctx) -> Result<i32> {
     Ok(if failed > 0 { 1 } else { 0 })
 }
 
+/// The cache, if there is one that still describes this registry.
+pub(crate) fn read_cache(ctx: &Ctx) -> Option<StatusCache> {
+    let cache = StatusCache::load(&cache_path().ok()?)?;
+    cache
+        .matches(ctx.registry.path(), &ctx.registry.all())
+        .then_some(cache)
+}
+
+/// The cached rows for `repos`, in the order `repos` are in.
+///
+/// The cache is validated against the whole registry before it gets here, so a
+/// selection can only ever be a subset of what it holds.
+pub(crate) fn select_cached(cache: &StatusCache, repos: &[Repo]) -> Vec<Row> {
+    repos
+        .iter()
+        .filter_map(|repo| cache.rows.iter().find(|row| row.alias == repo.alias))
+        .map(Row::from_cached)
+        .collect()
+}
+
+/// Best effort. A cache that cannot be written costs a preview, not a run, so
+/// `grit status` says nothing about it — `grit shell refresh`, whose entire job
+/// this is, does.
+fn write_cache(ctx: &Ctx, rows: &[Row]) {
+    let _ = try_write_cache(ctx, rows);
+}
+
+pub(crate) fn try_write_cache(ctx: &Ctx, rows: &[Row]) -> crate::error::Result<()> {
+    let cached = StatusCache::new(
+        ctx.registry.path(),
+        rows.iter().map(Row::to_cached).collect(),
+    );
+    cached.save(&cache_path()?)
+}
+
 /// Snapshot every repo in parallel, returning rows in the input order.
-fn collect(repos: Vec<Repo>) -> Vec<Row> {
+pub(crate) fn collect(repos: Vec<Repo>) -> Vec<Row> {
     let snapshots: Vec<Result<Snapshot, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = repos
             .iter()
@@ -81,7 +178,11 @@ fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or_default().to_string()
 }
 
-fn print_table(rows: &[Row], ctx: &Ctx) {
+/// The dashboard as a table, before anyone decides how to paint it.
+///
+/// Shared with `grit shell preview`, which renders the same geometry into text
+/// plus highlight ranges rather than into ANSI. Two renderers, one layout.
+pub(crate) fn build_table(rows: &[Row], ctx: &Ctx) -> Table {
     let mut table = Table::new([
         "alias", "branch", "sync", "state", "commit", "subject", "age",
     ])
@@ -97,9 +198,16 @@ fn print_table(rows: &[Row], ctx: &Ctx) {
         });
     }
 
-    print!("{}", table.render());
+    table
+}
+
+fn print_table(rows: &[Row], ctx: &Ctx, note: Option<String>) {
+    print!("{}", build_table(rows, ctx).render());
     println!();
-    print!("{}", footer(&summarise(rows), ctx.color));
+
+    let mut parts = summarise(rows);
+    parts.extend(note);
+    print!("{}", footer(&parts, ctx.color));
 }
 
 fn snapshot_cells(repo: &Repo, snap: &Snapshot) -> Vec<Cell> {
@@ -223,7 +331,7 @@ fn state_cell(snap: &Snapshot) -> Cell {
 
 /// The bullet-separated line under the table. Only non-zero facts appear, so a
 /// quiet day reads `4 repos · all clean`.
-fn summarise(rows: &[Row]) -> Vec<String> {
+pub(crate) fn summarise(rows: &[Row]) -> Vec<String> {
     let snaps: Vec<&Snapshot> = rows
         .iter()
         .filter_map(|r| r.outcome.as_ref().ok())

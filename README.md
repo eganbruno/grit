@@ -88,6 +88,62 @@ grit api log --oneline -n 10      # any git command, flags and all
 grit @release fetch               # run it in every repo tagged `release`
 ```
 
+## The dashboard before you ask for it
+
+Type `grit`, pause, and the table appears under your cursor. Keep typing and it
+goes away.
+
+```
+$ grit
+  ALIAS      BRANCH               SYNC  STATE     COMMIT   SUBJECT                          AGE
+  ─────────────────────────────────────────────────────────────────────────────────────────────
+  api        feature/rate-limits  ↑2    ●3 ○1     15beeba  add rate limit headers           20m
+  dashboard  main                 ✓     clean     57a90bc  bump chart library to 4.2         2d
+
+  2 repos · 1 dirty · 1 ahead · 4s ago
+```
+
+You wanted to know the state of things *before* deciding what to type, which is
+the wrong way round from running a command to find out. Add this to `~/.zshrc`:
+
+```bash
+eval "$(grit shell init zsh)"
+```
+
+It is the same table `grit status` prints, drawn from a cache so it costs
+nothing to show, with a note in the footer saying how old the reading is. A
+refresh runs behind it, and a reading old enough to mislead is not shown at all
+— you get the fresh one a moment later instead.
+
+Nothing is running while you type: the timer is armed when the buffer becomes
+`grit` and cancelled the moment it stops being. `TMOUT` and `TRAPALRM` are left
+alone, so an auto-logout you have configured keeps working.
+
+| Setting | |
+| --- | --- |
+| `GRIT_PREVIEW_TRIGGERS` | array of buffers that summon it. Default `(grit)`. |
+| `GRIT_PREVIEW_DELAY` | whole seconds of stillness first. Default `1`. |
+| `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G`; empty binds nothing. |
+| `GRIT_PREVIEW_IDLE` | `0` for the key only, no timer. |
+
+**bash and fish** get `Ctrl-G` instead of the pause, because neither runs a hook
+while you sit at the prompt:
+
+```bash
+eval "$(grit shell init bash)"    # ~/.bashrc
+grit shell init fish | source     # ~/.config/fish/config.fish
+```
+
+The cached dashboard is a command in its own right, and cheap enough for a
+prompt or a tmux status line:
+
+```bash
+grit status --cached              # the last reading, in milliseconds
+```
+
+It exits non-zero and prints nothing when there is no reading to show, so a
+script can tell that apart from an empty registry.
+
 ## Commands
 
 | Command | What it does |
@@ -98,9 +154,10 @@ grit @release fetch               # run it in every repo tagged `release`
 | `grit status` | Branch, sync state and working-tree state for each repo. |
 | `grit <alias> <args...>` | Run git in that repo with those arguments. |
 | `grit @<tag> <args...>` | Run it in every repo carrying that tag. |
+| `grit shell init <shell>` | Print the shell integration. `zsh`, `bash` or `fish`. |
 
 `show` and `status` both take `--tag <TAG>` and `--json`. `status` also takes a
-list of aliases: `grit status api docs`.
+list of aliases (`grit status api docs`) and `--cached`.
 
 ### Reading the dashboard
 
@@ -147,6 +204,11 @@ added_at = "2026-08-03T11:49:22Z"
 
 Colour follows [`NO_COLOR`](https://no-color.org) and switches off when stdout
 is not a terminal. `--color always|never|auto` overrides both.
+
+The last dashboard is cached under `~/.cache/grit/status.json`, or wherever
+`$GRIT_CACHE` points. Deleting it costs one `grit status`. It is refused rather
+than trusted whenever the registry has changed since it was written, so a repo
+you have just removed can never appear in a preview.
 
 ## How it works
 

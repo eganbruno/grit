@@ -27,6 +27,10 @@ Examples:
   grit show                                aliases, paths and tags
   grit docs commit -am \"changelog\"         run git in the docs repo
   grit @release fetch                      fetch every repo tagged release
+
+Seeing the dashboard without asking for it:
+  grit shell init zsh                      print the shell integration
+  eval \"$(grit shell init zsh)\"            type `grit`, pause, and the table appears
 ";
 
 #[derive(Debug, Parser)]
@@ -75,6 +79,9 @@ pub enum Command {
 
     /// Dashboard: branch, sync state and working-tree state for each repo.
     Status(StatusArgs),
+
+    /// Shell integration — the dashboard, at the prompt, before you hit enter.
+    Shell(ShellArgs),
 
     /// `grit <alias|@tag> <args...>` — run the repo's VCS with those arguments.
     ///
@@ -132,6 +139,81 @@ pub struct StatusArgs {
     /// Emit JSON instead of a table.
     #[arg(long)]
     pub json: bool,
+
+    /// Show the last reading instead of taking a new one.
+    ///
+    /// Runs no git and no dolt, so it answers in milliseconds — which is what
+    /// makes a dashboard cheap enough to put in a prompt, a tmux status line or
+    /// the shell integration. The footer says how old the reading is.
+    #[arg(long)]
+    pub cached: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellArgs {
+    #[command(subcommand)]
+    pub command: ShellCommand,
+}
+
+/// `init` is the part anyone types. The other two are the protocol the emitted
+/// script speaks back to grit, and are hidden because a human has no use for
+/// them — but they are ordinary commands, not a private channel, so a curious
+/// user running one gets something sensible rather than a panic.
+#[derive(Debug, Subcommand)]
+pub enum ShellCommand {
+    /// Print the integration for a shell. Feed it to `eval` from your rc file.
+    Init(ShellInitArgs),
+
+    /// The cached dashboard as plain text plus the ranges to colour.
+    #[command(hide = true)]
+    Preview(ShellPreviewArgs),
+
+    /// Take a fresh reading into the cache, printing nothing.
+    #[command(hide = true)]
+    Refresh(ShellRefreshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ShellInitArgs {
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellPreviewArgs {
+    /// Show at most this many repos, and say how many were left out.
+    ///
+    /// The preview is drawn *below* the line being typed, so a table taller
+    /// than the screen scrolls the prompt away — the shell passes the room it
+    /// actually has.
+    #[arg(long, value_name = "N")]
+    pub max_rows: Option<usize>,
+
+    /// Draw nothing if the last reading is older than this many seconds.
+    ///
+    /// A table that appeared on its own is read at a glance, so showing a
+    /// four-hour-old one is worse than showing none: the caller has just
+    /// started a refresh and will ask again a second later.
+    #[arg(long, value_name = "SECONDS")]
+    pub max_age: Option<i64>,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellRefreshArgs {
+    /// Do nothing if the cache is younger than this many seconds.
+    ///
+    /// The integration fires a refresh on every idle tick; this is what stops
+    /// that from meaning a `git status` per second per repository.
+    #[arg(long, value_name = "SECONDS", default_value_t = 0)]
+    pub max_age: i64,
 }
 
 /// The two spellings of the register shorthand.

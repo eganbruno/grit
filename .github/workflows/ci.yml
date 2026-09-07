@@ -52,6 +52,17 @@ jobs:
             sudo bash -c 'curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash'
           fi
           dolt version
+      # `tests/cli_shell.rs` checks each emitted init script against its own
+      # shell's parser and skips when that shell is missing. Supply all three,
+      # or the checks pass by not running.
+      - name: Install the shells the init scripts target
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install fish
+          else
+            sudo apt-get update && sudo apt-get install -y zsh fish
+          fi
+          zsh --version && bash --version | head -1 && fish --version
       - run: cargo test --all-features
 
   msrv:
