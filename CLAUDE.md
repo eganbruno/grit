@@ -8,7 +8,7 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 229 tests, ~17s
+cargo test                                   # 258 tests, ~17s
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
@@ -79,11 +79,37 @@ line you are typing. Four things hold it up, and each is easy to undo:
   not bytes and not display columns — which is what `Table::render_highlighted`
   and `theme::zsh_style` exist for. `tests/cli_shell.rs` slices the text with
   the offsets it was given, because an off-by-one is invisible in the output.
-- **The timer is `zsh/sched`, not `TMOUT`.** `src/shell/grit.zsh` says why at
-  length; the short version is that a sched entry can be armed and cancelled
-  part-way through a line where TMOUT cannot, so the shell runs no timer at all
-  except in the second after the trigger is typed — and grit never touches
-  TMOUT or TRAPALRM, so it cannot disable anyone's auto-logout.
+- **The timer is a descriptor watched with `zle -F`** — not `TMOUT`, and no
+  longer `zsh/sched`. `src/shell/grit.zsh` says why at length; the short version
+  is that `sched` cannot express a delay under a second (`sched +0.5` is a parse
+  error) and the default is 0.5. Three things about the replacement bite:
+  - **a `zle -F` installed from inside a `zle -F` handler never fires.** ZLE is
+    already blocked in its select and does not revisit the descriptor set until
+    a key arrives. So the sleeper is one subshell that keeps ticking and
+    stopping is grit's job — it is not a per-tick fork, and it cannot be
+    rewritten as one.
+  - **the handler must read its tick.** An unread descriptor stays readable and
+    ZLE calls straight back, with no pause at all.
+  - **`_grit_preview_release` owns both the descriptor and the armed flag.** The
+    two can disagree, TRAPINT can land in the window where they do, and an arm
+    that overwrites a live descriptor number orphans its ticker for the life of
+    the shell. Anything that closes the descriptor goes through that one
+    function.
+
+  grit still never touches TMOUT or TRAPALRM, so it cannot disable anyone's
+  auto-logout, and nothing is watched at all except in the half second after the
+  trigger is typed. `tests/shell/preview.py` asserts that with `zle -FL`; an
+  empty `$(sched)` proves nothing now and `jobs` never lists a process
+  substitution.
+
+`grit shell enable` writes the loading line into a startup file and
+`disable` takes back exactly the block it wrote, matched by markers. Two rules
+there: grit edits a startup file **only** when asked — being run is not asking,
+and installing grit changes nothing — and a line grit did not write is reported
+rather than edited, because guessing where someone's own line ends is how a tool
+eats a config. `src/shell/mod.rs` keeps the file handling, so `commands/` stays
+out of the filesystem; the add/remove halves are pure string functions with the
+tests to match.
 
 Only `grit status` with no alias and no `--tag` writes the cache. A filtered run
 cached as if it were everything leaves repos silently absent from the preview,

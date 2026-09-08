@@ -1,5 +1,6 @@
 # grit — the dashboard at the prompt, before you press enter.
 #
+#   grit shell enable        installs the line below into your startup file
 #   eval "$(grit shell init zsh)"
 #
 # Type `grit`, pause, and the table appears under the line you are editing.
@@ -8,7 +9,8 @@
 # Settings, set before the eval:
 #
 #   GRIT_PREVIEW_TRIGGERS  array of buffers that summon it      (grit)
-#   GRIT_PREVIEW_DELAY     whole seconds of stillness first     (1)
+#   GRIT_PREVIEW_DELAY     seconds of stillness first; may be    (0.5)
+#                          fractional
 #   GRIT_PREVIEW_KEY       key that draws it on demand; this    (^G)
 #                          replaces zsh's `send-break`. Empty
 #                          binds nothing.
@@ -17,18 +19,27 @@
 # Most of what follows is shaped by measured zsh 5.9 behaviour rather than by
 # taste. The load-bearing parts:
 #
-#   * The timer is `zsh/sched`, not `TMOUT`. ZLE consults the scheduled-function
-#     list every time it recomputes its input timeout, so a sched entry can be
-#     armed and cancelled part-way through a line — TMOUT is read only when the
-#     line read begins and cannot be armed mid-line. It also means this never
-#     touches TMOUT or TRAPALRM, so it cannot quietly disable someone's
-#     auto-logout, and the shell is running no timer at all except in the second
-#     after you have typed the trigger.
+#   * The timer is a file descriptor watched with `zle -F`, not `TMOUT` and no
+#     longer `zsh/sched`. TMOUT is read only when the line read begins, so it
+#     cannot be armed mid-line at all. `sched` can, and was what this used, but
+#     its time specifier is whole seconds — `sched +0.5` is a parse error — and
+#     half a second is the difference between a pause you choose and a pause you
+#     wait out. So arming now opens a descriptor on a subshell that goes readable
+#     after the delay, and ZLE wakes us when it does.
+#
+#     The cost is one short-lived subshell per arm, which is why the delay is
+#     read in `zselect` centiseconds from a builtin rather than by exec'ing
+#     `sleep`. Note this is per *trigger match*, not per prompt: a sleeper on
+#     every prompt is the thing that keeps fish on its key binding alone.
+#
+#     Either way this never touches TMOUT or TRAPALRM, so it cannot quietly
+#     disable someone's auto-logout, and nothing is being watched at all except
+#     in the half second after you have typed the trigger.
 #   * POSTDISPLAY is read-only outside a widget, and setting it draws nothing
 #     without `zle -R`.
-#   * $BUFFER is not visible inside a scheduled function, so the trigger is
-#     decided when the timer is armed and checked again inside the widget. That
-#     second check is what makes a timer that outlives its line harmless.
+#   * The trigger is decided when the timer is armed and checked again inside
+#     the widget. That second check is what makes a timer outliving its line
+#     harmless, and it is why the handler calls a widget rather than drawing.
 #   * The clear in `line-pre-redraw` is unconditional and first. accept-line
 #     redraws while the buffer is still the trigger, so a clear behind an `if`
 #     leaves the table stranded above the command's own output.
@@ -40,7 +51,7 @@ if [[ -o interactive ]]; then
 
 typeset -ga GRIT_PREVIEW_TRIGGERS
 (( $#GRIT_PREVIEW_TRIGGERS )) || GRIT_PREVIEW_TRIGGERS=( grit )
-: ${GRIT_PREVIEW_DELAY:=1}
+: ${GRIT_PREVIEW_DELAY:=0.5}
 : ${GRIT_PREVIEW_KEY=^G}
 : ${GRIT_PREVIEW_IDLE:=1}
 
@@ -49,11 +60,18 @@ typeset -g  _grit_preview_text=
 typeset -gi _grit_preview_shown=0
 typeset -gi _grit_preview_armed=0
 typeset -gi _grit_preview_tries=0
+typeset -gi _grit_preview_fd=0
 
-# How many one-second attempts to make before giving up on a line. Only more
-# than one when the last reading was too old to show and a fresh one is still
-# being taken, so this is the patience for a slow set of repositories.
-typeset -gir _grit_preview_max_tries=5
+# How long to keep retrying a line before giving up, in seconds. More than one
+# attempt happens only when the last reading was too old to show and a fresh one
+# is still being taken, so this is the patience for a slow set of repositories.
+#
+# Seconds rather than a count of attempts, because the two stop agreeing the
+# moment the delay is not one second: five attempts at the old whole-second
+# timer meant five seconds of patience, and at the current default it would mean
+# two and a half — halving the delay would quietly halve how long grit waits for
+# a slow refresh, which is not what changing a delay should do.
+typeset -gir _grit_preview_patience=5
 
 autoload -Uz add-zle-hook-widget
 
@@ -78,8 +96,16 @@ _grit_preview_show() {
 	local -i rows=$(( ${LINES:-24} - 6 ))
 	(( rows > 0 )) || rows=1
 
+	# One column short of the terminal, deliberately. A line drawn right up
+	# to the last column trips the auto-margin: the cursor wraps past it and
+	# the table takes one more screen row than it has newlines, so zsh's own
+	# count comes up short and the bottom row of the previous draw is never
+	# erased. `grit.bash` and `grit.fish` reserve the column for this too.
+	local -i width=$(( ${COLUMNS:-80} - 1 ))
+	(( width >= 20 )) || width=20
+
 	local -a out
-	out=( "${(@f)$(COLUMNS=${COLUMNS:-80} command grit shell preview --max-rows $rows --max-age 60 2>/dev/null)}" )
+	out=( "${(@f)$(COLUMNS=$width command grit shell preview --max-rows $rows --max-age 60 2>/dev/null)}" )
 	(( $#out > 1 )) || return 0
 
 	local -i n=${out[1]}
@@ -143,43 +169,91 @@ _grit_preview_toggle() {
 }
 zle -N _grit_preview_toggle
 
+# Open a descriptor that goes readable every `GRIT_PREVIEW_DELAY`, and have ZLE
+# wake us on it.
+#
+# One subshell that keeps ticking, rather than a fresh one per tick, and that is
+# not a saving — it is the only arrangement that works. A `zle -F` installed
+# from inside a `zle -F` handler is accepted and then never fires: ZLE is
+# already blocked in its select by then and does not revisit the descriptor set
+# until a key arrives, which for an idle line is never. So the descriptor has to
+# outlive the tick that woke us, and stopping is our job rather than the
+# sleeper's.
 _grit_preview_arm() {
 	(( _grit_preview_armed )) && return 0
-	sched +$GRIT_PREVIEW_DELAY _grit_preview_fire
+
+	# Whatever the flag said, a descriptor still open here is one whose number we
+	# are about to overwrite — and losing the number orphans its ticker for the
+	# life of the shell, writing into a pipe nobody is left to close.
+	_grit_preview_release
+
+	# Centiseconds, because that is what `zselect -t` speaks. Assigning a float
+	# expression to an integer truncates, which is the rounding we want: a delay
+	# too small to express is a delay of nothing, not an error.
+	local -i centis=$(( GRIT_PREVIEW_DELAY * 100 ))
+	(( centis > 0 )) || centis=1
+
+	exec {_grit_preview_fd}< <(while :; do zselect -t $centis 2>/dev/null; print -n x || break; done)
+	(( _grit_preview_fd )) || return 0
+
+	zle -F $_grit_preview_fd _grit_preview_fire
 	_grit_preview_armed=1
 	return 0
 }
 
-# Cancel our pending timer and nobody else's. Deleting from the highest index
-# down keeps the lower ones where `sched` reported them.
+# Stop watching and close our end, which is what the ticker is waiting to be
+# told: its next write into a pipe with no reader costs it one SIGPIPE.
+#
+# Deliberately not guarded on `_grit_preview_armed`. The flag and the descriptor
+# can disagree — `_grit_preview_fire` runs with one released and the other not,
+# and TRAPINT can arrive inside that window — and a disarm that believed the
+# flag would return with a descriptor still open. The descriptor is the truth
+# here, so the flag is set from the same place that closes it.
 _grit_preview_disarm() {
-	(( _grit_preview_armed )) || return 0
-	_grit_preview_armed=0
-
-	local -a pending=( ${(f)"$(sched)"} )
-	local -i i
-	for (( i = $#pending; i >= 1; i-- )); do
-		[[ $pending[i] == *_grit_preview_fire* ]] && sched -$i
-	done
+	_grit_preview_release
 	return 0
 }
 
-_grit_preview_fire() {
+_grit_preview_release() {
 	_grit_preview_armed=0
+	(( _grit_preview_fd )) || return 0
+	zle -F -$_grit_preview_fd 2>/dev/null
+	exec {_grit_preview_fd}<&- 2>/dev/null
+	_grit_preview_fd=0
+	return 0
+}
+
+# Called by `zle -F` with the descriptor as its first argument.
+_grit_preview_fire() {
+	local fd=$1
+
+	# Consume the tick first. An unread descriptor stays readable, and ZLE would
+	# call this straight back with no pause at all.
+	local tick
+	read -r -k1 -u $fd tick 2>/dev/null
+
 	(( _grit_preview_tries++ ))
 
 	# Behind the table, top up the reading it is drawn from. grit throttles
 	# this itself, so a warm cache costs one process exit and no git at all.
-	(command grit shell refresh --max-age 30 &) >/dev/null 2>&1
+	#
+	# It closes the ticker's descriptor on the way in. A child inheriting the
+	# read end is a reader, and while it lives the ticker's writes succeed — so a
+	# refresh outliving its disarm keeps a sleeper alive behind it.
+	( exec {_grit_preview_fd}<&- 2>/dev/null
+	  command grit shell refresh --max-age 30 & ) >/dev/null 2>&1
 
 	zle _grit_preview_show 2>/dev/null
 
 	# Nothing drawn means the last reading was too old to put in front of
-	# someone, and the refresh just started is what will fix that. Come back for
-	# it — a few times, then stop, so a repository that cannot be read at all
-	# does not turn this into a once-a-second spin.
-	if (( ! _grit_preview_shown && _grit_preview_tries < _grit_preview_max_tries )); then
-		_grit_preview_arm
+	# someone, and the refresh just started is what will fix that. Leaving the
+	# ticker running is how we come back for it — for as long as
+	# `_grit_preview_patience`, then stop, so a repository that cannot be read
+	# at all does not turn this into a permanent spin.
+	local -i max=$(( _grit_preview_patience / GRIT_PREVIEW_DELAY ))
+	(( max > 0 )) || max=1
+	if (( _grit_preview_shown || _grit_preview_tries >= max )); then
+		_grit_preview_release
 	fi
 	return 0
 }
@@ -204,9 +278,13 @@ _grit_preview_on_finish() {
 }
 zle -N _grit_preview_on_finish
 
-# `zsh/sched` ships with zsh, but the key binding should still work if some
-# build of it does not.
-if ! zmodload -F zsh/sched b:sched 2>/dev/null; then
+# `zsh/zselect` is what the timer's sleeper counts with, and it ships with
+# zsh — but the key binding should still work on a build without it, so a
+# failure here costs the idle preview and nothing else. Checking the builtin
+# rather than `zmodload`'s exit status is deliberate: a load can report
+# success and still leave nothing callable, and the subshell would then race
+# straight past its delay and draw instantly.
+if ! { zmodload -F zsh/zselect b:zselect 2>/dev/null && (( ${+builtins[zselect]} )) }; then
 	GRIT_PREVIEW_IDLE=0
 fi
 

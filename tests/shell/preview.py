@@ -306,9 +306,17 @@ def zsh_neighbours_suite(grit, report, autosuggestions=None):
     sh = Shell(["zsh", "-f", "-i"], fx.env())
     sh.run(f"source {rc}", 1.2)
     # Quoted: `[unset]` is a glob character class to an unquoted zsh.
-    state = sh.run('print -r -- "TMOUT=<${TMOUT:-unset}> SCHED=<$(sched)> JOBS=<$(jobs)>"')
-    report.check("nothing is scheduled at rest",
-                 "TMOUT=<unset>" in state and "SCHED=<>" in state and "JOBS=<>" in state,
+    #
+    # `zle -FL` is the load-bearing one. The timer is a watched descriptor now,
+    # so an empty `$(sched)` says nothing at all — it would pass just as well if
+    # the preview had left a ticker running on every prompt. A process
+    # substitution never appears in `jobs` either, which is why neither of the
+    # other two can be trusted to notice.
+    state = sh.run('print -r -- "TMOUT=<${TMOUT:-unset}> WATCH=<$(zle -FL 2>/dev/null)>'
+                   ' SCHED=<$(sched)> JOBS=<$(jobs)>"')
+    report.check("nothing is watched or scheduled at rest",
+                 "TMOUT=<unset>" in state and "WATCH=<>" in state
+                 and "SCHED=<>" in state and "JOBS=<>" in state,
                  state.strip())
 
     # An ordinary command that is not the trigger must cost nothing at all.
@@ -368,7 +376,12 @@ def zsh_staleness_suite(grit, report):
     json.dump(cache, open(fx.cache, "w"))
     backdated = open(fx.cache).read()
 
-    rc = fx.rc("stale.zsh", f"PS1='%% '\neval \"$({fx.grit} shell init zsh)\"\n")
+    # The read windows below encode "before the second tick" and "after it", so
+    # the delay is pinned rather than inherited: this suite is about staleness,
+    # and halving the shipped default should not silently turn it into a test of
+    # something else.
+    rc = fx.rc("stale.zsh",
+               f"PS1='%% '\nGRIT_PREVIEW_DELAY=1\neval \"$({fx.grit} shell init zsh)\"\n")
     sh = Shell(["zsh", "-f", "-i"], fx.env())
     sh.run(f"source {rc}", 1.2)
 
