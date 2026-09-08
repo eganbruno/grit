@@ -37,7 +37,7 @@ pub const RESERVED_ALIASES: &[&str] = &[
 /// The sigil that turns a name into a tag lookup: `grit @release fetch`.
 pub const GROUP_SIGIL: char = '@';
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Registry {
     file: RegistryFile,
     path: PathBuf,
@@ -103,10 +103,6 @@ impl Registry {
 
     pub fn is_empty(&self) -> bool {
         self.file.repos.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.file.repos.len()
     }
 
     /// Every repo, alphabetically by alias.

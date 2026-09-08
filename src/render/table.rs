@@ -174,18 +174,6 @@ impl Cell {
     }
 }
 
-impl From<&str> for Cell {
-    fn from(s: &str) -> Self {
-        Cell::plain(s)
-    }
-}
-
-impl From<String> for Cell {
-    fn from(s: String) -> Self {
-        Cell::plain(s)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
     Left,
@@ -270,10 +258,6 @@ impl Table {
             self.columns.len()
         );
         self.rows.push(cells);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
     }
 
     /// Natural width of each column: the widest of its header and its cells.

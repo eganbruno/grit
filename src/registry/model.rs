@@ -27,14 +27,6 @@ pub enum VcsKind {
 }
 
 impl VcsKind {
-    /// The name of the CLI binary this backend drives.
-    pub const fn program(self) -> &'static str {
-        match self {
-            VcsKind::Git => "git",
-            VcsKind::Dolt => "dolt",
-        }
-    }
-
     pub const fn as_str(self) -> &'static str {
         match self {
             VcsKind::Git => "git",

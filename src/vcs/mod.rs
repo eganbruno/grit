@@ -110,10 +110,6 @@ pub trait Vcs: Send + Sync {
     /// Implementations must inherit stdio so pagers, colour detection and
     /// `$EDITOR` behave exactly as they would in an interactive shell.
     fn exec(&self, path: &Path, args: &[OsString]) -> Result<ExitStatus>;
-
-    fn detect(&self, path: &Path) -> bool {
-        self.discover(path).is_some()
-    }
 }
 
 /// Seconds-to-`4h`, which is not really dolt's despite living there: the

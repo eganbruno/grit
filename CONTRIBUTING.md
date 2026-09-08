@@ -168,8 +168,8 @@ screen is wrong, and nothing but a terminal will show you those.
 
 Two exist: `vcs/git.rs` and `vcs/dolt.rs`. Say you want `jj`.
 
-1. Add the variant to `VcsKind` in `src/registry/model.rs`, and its `program()`
-   and `as_str()` arms.
+1. Add the variant to `VcsKind` in `src/registry/model.rs`, and its `as_str()`
+   arm.
 2. Add `src/vcs/jj.rs` implementing `Vcs` — four methods: `kind`, `discover`,
    `snapshot`, `exec`.
 3. List it in `provider_for` and `all_providers` in `src/vcs/mod.rs`.

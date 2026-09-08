@@ -76,10 +76,6 @@ impl TestEnv {
         &self.root
     }
 
-    pub fn config(&self) -> &Path {
-        &self.config
-    }
-
     pub fn config_contents(&self) -> String {
         std::fs::read_to_string(&self.config).unwrap_or_default()
     }
@@ -237,12 +233,6 @@ impl TestEnv {
             cmd.args(["--tag", tag]);
         }
         cmd.assert().success();
-    }
-}
-
-impl Default for TestEnv {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
