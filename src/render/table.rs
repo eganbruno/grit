@@ -41,6 +41,31 @@ pub struct Cell {
     spans: Vec<Span>,
 }
 
+/// Text as one row of a table can hold it: a single line, no control characters.
+///
+/// A newline in a cell puts the rest of that row on the next screen line and
+/// everything after it in the wrong column; in the shell preview, where zsh is
+/// counting rows so it can erase them again, it also leaves debris above the
+/// prompt. A tab is the same problem with a variable width.
+///
+/// Not a hypothetical: cells are filled from strings read out of repositories,
+/// and dolt's `dolt_log.message` is the whole commit message rather than its
+/// subject. The backend trims that itself — see `vcs::dolt::subject_line` — but
+/// a renderer that comes apart on data it was handed is the wrong place to be
+/// trusting, so every cell is flattened on the way in.
+///
+/// Collapsed to spaces rather than cut short, so nothing vanishes without the
+/// column's own `…` to account for it. Borrowed back untouched in the ordinary
+/// case, which is every cell that has no control character in it.
+fn single_line(text: String) -> String {
+    if !text.contains(|c: char| c.is_control()) {
+        return text;
+    }
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 impl Cell {
     pub fn empty() -> Self {
         Self::default()
@@ -54,7 +79,7 @@ impl Cell {
     pub fn styled(text: impl Into<String>, style: Style) -> Self {
         Self {
             spans: vec![Span {
-                text: text.into(),
+                text: single_line(text.into()),
                 style,
             }],
         }
@@ -62,7 +87,7 @@ impl Cell {
 
     /// Append a span. Returns `self` so cells can be built in one expression.
     pub fn push(mut self, text: impl Into<String>, style: Style) -> Self {
-        let text = text.into();
+        let text = single_line(text.into());
         if !text.is_empty() {
             self.spans.push(Span { text, style });
         }
@@ -471,6 +496,35 @@ pub fn paint(text: &str, style: Style, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_newline_in_a_cell_cannot_break_the_row() {
+        let cell = Cell::plain("subject\n\nand a body that would land in the next column");
+        assert!(!cell.text().contains('\n'), "{:?}", cell.text());
+        assert!(
+            cell.text().starts_with("subject  and a body"),
+            "{:?}",
+            cell.text()
+        );
+    }
+
+    #[test]
+    fn tabs_and_carriage_returns_go_the_same_way() {
+        let cell = Cell::plain("a\tb\rc");
+        assert_eq!(cell.text(), "a b c");
+    }
+
+    #[test]
+    fn a_pushed_span_is_flattened_too() {
+        let cell = Cell::plain("first").push("second\nthird", Style::new());
+        assert!(!cell.text().contains('\n'), "{:?}", cell.text());
+    }
+
+    #[test]
+    fn ordinary_text_is_left_exactly_as_it_was() {
+        let text = "✨ ship the 2.0 rewrite ✨ (#420) — with a, comma";
+        assert_eq!(Cell::plain(text).text(), text);
+    }
 
     /// What one cell contributes to a line, truncated to `max` columns.
     fn truncated(cell: &Cell, max: usize) -> String {

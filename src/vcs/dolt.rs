@@ -274,7 +274,7 @@ fn parse_snapshot(json: &str) -> serde_json::Result<Snapshot> {
 
     let head = row.head_id.as_deref().map(|id| Commit {
         short_id: id.chars().take(SHORT_ID_LEN).collect(),
-        subject: row.head_subject.clone().unwrap_or_default(),
+        subject: subject_line(row.head_subject.as_deref().unwrap_or_default()).to_string(),
         age: compact_age(row.head_age),
     });
 
@@ -305,6 +305,17 @@ fn parse_snapshot(json: &str) -> serde_json::Result<Snapshot> {
             RepoState::Normal
         },
     })
+}
+
+/// The subject of a commit message: its first line.
+///
+/// `dolt_log.message` is the *whole* message where git's `%s` is the subject
+/// alone, so this is where the two backends are made to agree. Without it the
+/// subject column carries a commit body, newlines and all, and the table comes
+/// apart around it — the row after the body lands in the wrong column, and in
+/// the shell preview zsh is left counting rows that are not where it thinks.
+fn subject_line(message: &str) -> &str {
+    message.lines().next().unwrap_or_default().trim_end()
 }
 
 /// Count the commits on each side of the upstream.
@@ -465,6 +476,33 @@ mod tests {
         assert_eq!(head.short_id, "c976njr9");
         assert_eq!(head.subject, "add gone");
         assert_eq!(head.age, "4m");
+    }
+
+    /// Verbatim from the commit that put a body in the dashboard.
+    #[test]
+    fn only_the_first_line_of_a_commit_message_is_the_subject() {
+        let message = "Move EXIOBASE FLAG and land management values to premium slots (API-9974)\n\
+                       \nEXIOBASE FLAG and land management data is a licence add-on on top of a\n\
+                       basic EXIOBASE 3.11 licence, so its values have to sit in indicator slots\n\
+                       the API can gate separately from the rest of the dataset.";
+        assert_eq!(
+            subject_line(message),
+            "Move EXIOBASE FLAG and land management values to premium slots (API-9974)"
+        );
+    }
+
+    #[test]
+    fn a_message_body_never_reaches_the_snapshot() {
+        let out = BUSY.replace("add gone", "the subject\\n\\nand a body");
+        let head = parse_snapshot(&out).unwrap().head.unwrap();
+        assert_eq!(head.subject, "the subject");
+        assert!(!head.subject.contains('\n'), "{:?}", head.subject);
+    }
+
+    #[test]
+    fn a_one_line_message_is_left_alone() {
+        assert_eq!(subject_line("just the subject"), "just the subject");
+        assert_eq!(subject_line(""), "");
     }
 
     #[test]

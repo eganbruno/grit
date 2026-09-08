@@ -346,3 +346,54 @@ fn a_database_held_by_a_sql_server_still_reads() {
     assert_eq!(json[0]["unstaged"], 1, "{json}");
     assert_eq!(json[0]["staged"], 0, "{json}");
 }
+
+/// A dolt commit message is the whole message, body and all, where git hands
+/// over only the subject. Left as it came, the body landed in the dashboard:
+/// its lines pushed the following repo into the wrong columns, and in the shell
+/// preview they left rows stranded above the prompt.
+#[test]
+fn a_commit_body_does_not_get_into_the_table() {
+    needs_dolt!();
+    let env = TestEnv::new();
+    let repo = env.dolt_repo("data");
+
+    let subject = "Move the values to premium slots";
+    env.dolt_sql(&repo, "insert into items values (1, 'a')");
+    env.dolt(&repo, &["add", "."]);
+    env.dolt(
+        &repo,
+        &[
+            "commit",
+            "-m",
+            &format!("{subject}\n\nA body that would otherwise\nspill across the table.\n"),
+        ],
+    );
+    env.register("data", &repo, &[]);
+
+    let out = env.grit().args(["status", "--json"]).output().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let head = json[0]["head"]["subject"].as_str().unwrap_or_default();
+    assert_eq!(head, subject, "{json}");
+
+    // And the rendered table is still one line per repo.
+    let table = env.grit().arg("status").output().unwrap();
+    let stdout = String::from_utf8_lossy(&table.stdout);
+    assert!(
+        !stdout.contains("spill across the table"),
+        "the body reached the dashboard:\n{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|l| l.contains("A body that would otherwise"))
+            .count(),
+        0,
+        "{stdout}"
+    );
+    // header, rule, one row, blank, footer
+    let rows = stdout
+        .lines()
+        .filter(|l| l.trim_start().starts_with("data"))
+        .count();
+    assert_eq!(rows, 1, "expected exactly one row for `data`:\n{stdout}");
+}

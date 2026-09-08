@@ -49,6 +49,10 @@ same for the status cache.
     home directory as a repo
   - branch names reach SQL through `sql_literal`, because dolt allows a `'` in
     one
+  - **`dolt_log.message` is the whole commit message, not its subject.** git's
+    `%s` is the subject alone, so `subject_line` trims dolt's to match. Skip it
+    and a commit body goes into the dashboard: its lines push the next repo into
+    the wrong columns, and the preview leaves rows stranded above the prompt
   - **every number may arrive as a string.** With a `dolt sql-server` running
     against the database, `dolt sql` becomes a MySQL client and the wire
     protocol stringifies everything: `"0"`, not `0` or `false`. Both shapes are
@@ -102,6 +106,11 @@ box-drawing. Before changing the table:
   another copy of the alignment code.
 - colour must be off when stdout is not a terminal or `NO_COLOR` is set; the
   integration tests assert this.
+- **no cell may hold a control character.** `Cell` flattens newlines and tabs to
+  spaces on the way in, because cells are filled from strings read out of
+  repositories and a renderer that comes apart on its input is the wrong place
+  to be trusting. The backend that produced the newline should still fix it at
+  source — this is the net, not the answer.
 
 ## Testing
 
