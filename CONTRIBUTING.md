@@ -307,10 +307,16 @@ forking it.
 
 ```bash
 # bump `version` in Cargo.toml, then:
+cargo check                            # refresh Cargo.lock with the new version
 git commit -am "release 0.2.0"
-git tag v0.2.0
+git tag -a v0.2.0 -m "release 0.2.0"   # -a matters, see below
 git push --follow-tags
 ```
+
+`-a` is load-bearing. A bare `git tag v0.2.0` makes a *lightweight* tag, and
+`git push --follow-tags` pushes only annotated ones — so the push succeeds,
+reports the branch update, says nothing about a tag, and the release never
+fires. There is no error to search for.
 
 The workflow builds macOS and Linux binaries, publishes a GitHub release with a
 `curl | sh` installer, and opens the formula update on the tap. After the first
