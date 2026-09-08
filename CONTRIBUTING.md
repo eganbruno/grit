@@ -168,8 +168,10 @@ cargo build && python3 tests/shell/preview.py
 
 That types into zsh, bash and fish on a pseudo-terminal and asserts against the
 bytes they write back — the table appears, the colours land on the right cells,
-a keystroke erases it, Ctrl-C strands nothing, and a user who already has
-`TMOUT` set keeps their auto-logout. It is not part of `cargo test` because it
+a keystroke erases it, Ctrl-C strands nothing, a user who already has `TMOUT`
+set keeps their auto-logout, a neighbour's `zle -F` watch is still serviced
+after a teardown, and bash's `PROMPT_COMMAND` comes back with its owner's
+entries untouched in both the string and the array form. It is not part of `cargo test` because it
 waits on a one-second timer several times and would flake on a loaded runner;
 that is a reason to run it by hand, not a reason to skip it. Nearly every bug
 this feature had was of the kind where the script reads correctly and the

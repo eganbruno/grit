@@ -187,6 +187,18 @@ change what the tests see.
 
 Interactive TUI, shell completions, `grit clone`.
 
+**`PROMPT_COMMAND` is not grit's variable.** `src/shell/grit.bash` hooks it so
+a table that has scrolled into real output stops being ours to erase. Since
+bash 5.1 it may be an *array*, which prompt frameworks use. Assigning a string
+to one does not lose the other elements — bash writes element 0 — so the damage
+is quieter than it looks: it rewrites a line its owner put there, and the
+string check then only ever reads element 0, so a marker in element 1 reads as
+absent and gets added again. grit prepends its own element instead. `${VAR@a}`
+is how you tell, it needs bash 4.4, and it sits behind the version test rather
+than beside it because on bash 3.2 it is a runtime "bad substitution" that lazy
+`&&` never reaches. `tests/shell/preview.py` covers both shapes and skips the
+array half below 5.1.
+
 bash and fish get `^G` rather than the idle preview: neither fires a hook while
 you sit at the prompt. Not quite a dead end for fish — a self-armed background
 timer sending `SIGUSR1` to an `--on-signal` handler does run while its reader is

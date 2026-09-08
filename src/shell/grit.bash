@@ -77,10 +77,35 @@ __grit_preview_toggle() {
 # A command ran, so what we drew is real scrollback now rather than something
 # of ours to erase.
 __grit_preview_forget() { __grit_preview_rows=0; }
-case ";${PROMPT_COMMAND};" in
-	*";__grit_preview_forget;"*) ;;
-	*) PROMPT_COMMAND="__grit_preview_forget${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
-esac
+
+# bash 5.1 allowed `PROMPT_COMMAND` to be an array, and prompt frameworks use
+# it that way. Assigning a string to one does not drop the other elements —
+# bash writes element 0 — but it does rewrite a line somebody else owns into
+# `__grit_preview_forget;their command`, and the string check then only ever
+# inspects element 0, so a marker sitting in element 1 reads as absent and we
+# prepend a second time. Adding our own element leaves theirs alone, which is
+# the posture the rest of this integration takes.
+#
+# `${VAR@a}` needs bash 4.4, so it sits behind the version test rather than
+# beside it: `&&` is lazy, and on bash 3.2 the expansion is a runtime "bad
+# substitution" that is simply never reached.
+if [ "${BASH_VERSINFO[0]}" -ge 5 ] && [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+	__grit_pc_seen=0
+	for __grit_pc in "${PROMPT_COMMAND[@]}"; do
+		case $__grit_pc in
+			*__grit_preview_forget*) __grit_pc_seen=1 ;;
+		esac
+	done
+	if [ "$__grit_pc_seen" -eq 0 ]; then
+		PROMPT_COMMAND=(__grit_preview_forget "${PROMPT_COMMAND[@]}")
+	fi
+	unset __grit_pc __grit_pc_seen
+else
+	case ";${PROMPT_COMMAND};" in
+		*";__grit_preview_forget;"*) ;;
+		*) PROMPT_COMMAND="__grit_preview_forget${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+	esac
+fi
 
 # Ctrl-G and not, say, Ctrl-O: ^W ^U ^V ^O ^S ^Q ^Z are tty line-discipline
 # characters and never reach readline, so binding one of those succeeds and

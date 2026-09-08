@@ -474,6 +474,64 @@ def key_suite(grit, report, name, argv, rc_name, rc_body, prompt_wait=1.5):
     fx.clean()
 
 
+def bash_prompt_command_suite(grit, report):
+    """grit hooks `PROMPT_COMMAND` so a table that scrolled into real output
+    stops being ours to erase. It is somebody else's variable, and bash 5.1
+    let it be an array — which prompt frameworks use. Writing a string to an
+    array does not drop the other elements, bash puts it in element 0, but it
+    does rewrite a line its owner put there, and a marker landing anywhere but
+    element 0 then reads as absent and gets added a second time."""
+    print("\nbash — sharing PROMPT_COMMAND")
+    if not have("bash"):
+        return report.skip("bash PROMPT_COMMAND", "not installed")
+
+    fx = Fixture(grit)
+    # Sourced twice throughout: hooking once is the property under test.
+    twice = f'eval "$({fx.grit} shell init bash)"\n' * 2
+
+    rc = fx.rc("pc-string.bash",
+               f'PS1="% "\nPROMPT_COMMAND="echo THEIRS"\n{twice}')
+    sh = Shell(["bash", "--norc", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.5)
+    # Never name the function in the command, or the pty echo counts as a hit.
+    state = sh.run('printf "PC=<%s>\\n" "$PROMPT_COMMAND"', 1.2)
+    report.check("a string PROMPT_COMMAND keeps what was already in it",
+                 "echo THEIRS" in state, state.strip())
+    report.check("and grit hooks it once, not once per sourcing",
+                 state.count("__grit_preview_forget") == 1, state.strip())
+    sh.close()
+
+    out = subprocess.run(["bash", "-c", "echo ${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"],
+                         capture_output=True, text=True).stdout.split()
+    version = tuple(int(n) for n in out) if len(out) == 2 else (0, 0)
+    if version < (5, 1):
+        report.skip("bash array PROMPT_COMMAND",
+                    f"bash {version[0]}.{version[1]} has no array form")
+        fx.clean()
+        return
+
+    rc = fx.rc("pc-array.bash",
+               f'PS1="% "\nPROMPT_COMMAND=( "echo ALPHA" "echo BETA" )\n{twice}')
+    sh = Shell(["bash", "--norc", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.5)
+    dump = sh.run('printf "E:%s\\n" "${PROMPT_COMMAND[@]}"', 1.2)
+    elements = [line.split("E:", 1)[1] for line in dump.splitlines() if "E:" in line]
+
+    report.check("an array PROMPT_COMMAND keeps every element it had",
+                 "echo ALPHA" in dump and "echo BETA" in dump, repr(elements))
+    report.check("grit arrives as its own element rather than editing theirs",
+                 not any("ALPHA" in e and "__grit_preview_forget" in e for e in elements),
+                 repr(elements))
+    report.check("and is added once, not once per sourcing",
+                 dump.count("__grit_preview_forget") == 1, repr(elements))
+    # The elements run at every prompt, so their output is proof they survived.
+    ran = sh.run("true", 1.2)
+    report.check("their commands still run at the prompt",
+                 "ALPHA" in ran and "BETA" in ran, repr(ran))
+    sh.close()
+    fx.clean()
+
+
 def main():
     grit = sys.argv[1] if len(sys.argv) > 1 else "target/debug/grit"
     if not os.path.exists(grit):
@@ -486,6 +544,7 @@ def main():
     zsh_staleness_suite(grit, report)
     key_suite(grit, report, "bash", ["bash", "--norc", "-i"], "rc.bash",
               lambda fx: f'PS1="% "\nCOLUMNS={COLS}\neval "$({fx.grit} shell init bash)"\n')
+    bash_prompt_command_suite(grit, report)
     key_suite(grit, report, "fish", ["fish", "-i"], "rc.fish",
               lambda fx: f'{fx.grit} shell init fish | source\n', prompt_wait=3.0)
 
