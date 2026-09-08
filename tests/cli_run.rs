@@ -198,3 +198,76 @@ fn a_group_of_one_skips_the_divider() {
 
     assert_eq!(stdout.trim(), "main", "a single repo needs no chrome");
 }
+
+// `help` and `version` reach grit as passthrough targets, because clap has the
+// help subcommand disabled and `--version` is a flag. They are answered rather
+// than looked up as aliases, which is what they used to be.
+
+#[test]
+fn the_bare_word_help_prints_help_rather_than_hunting_for_an_alias() {
+    let env = TestEnv::new();
+
+    env.grit()
+        .arg("help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Work across many repositories"))
+        .stdout(predicate::str::contains("Examples:"));
+}
+
+#[test]
+fn help_takes_a_command_and_shows_that_commands_help() {
+    let env = TestEnv::new();
+
+    env.grit()
+        .args(["help", "status"])
+        .assert()
+        .success()
+        // The usage line has to name the whole path, not the bare leaf.
+        .stdout(predicate::str::contains("Usage: grit status"));
+
+    env.grit()
+        .args(["help", "shell", "enable"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: grit shell enable"));
+}
+
+#[test]
+fn help_for_something_that_is_not_a_command_says_so() {
+    let env = TestEnv::new();
+
+    env.grit()
+        .args(["help", "nonsense"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("`nonsense` is not a grit command"));
+}
+
+#[test]
+fn the_bare_word_version_agrees_with_the_flag() {
+    let env = TestEnv::new();
+
+    let word = env.grit().arg("version").output().unwrap();
+    let flag = env.grit().arg("--version").output().unwrap();
+
+    assert!(word.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&word.stdout),
+        String::from_utf8_lossy(&flag.stdout),
+        "`grit version` and `grit --version` must not drift"
+    );
+}
+
+#[test]
+fn a_repo_may_still_be_called_something_that_merely_looks_like_a_command() {
+    let env = TestEnv::new();
+    env.register("helper", &env.repo("helper"), &[]);
+
+    // Only the exact words are intercepted; `helper` is an ordinary alias.
+    env.grit()
+        .args(["helper", "rev-parse", "--abbrev-ref", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("main"));
+}

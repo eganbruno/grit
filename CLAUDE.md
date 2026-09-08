@@ -27,6 +27,16 @@ same for the status cache.
   alias.** `cli::tests::every_subcommand_is_reserved` enforces it. It also
   reserves two names — `completions` and `run` — that are not subcommands yet,
   so nobody's alias can shadow them later; the test only runs one way.
+- **`-k` is not a `global` flag, and `--color` is.** clap offers a global flag
+  under every subcommand's help, so making `-k` global had `grit show --help`
+  advertising "keep going after a repo fails" on a command with no fan-out,
+  and `grit show -k` exiting 0 having done nothing. Only `run::fan_out` reads
+  it. `--color` is global because every command paints.
+- **`grit help` and `grit version` are answered in `commands::dispatch`.**
+  `disable_help_subcommand` and `--version`-as-a-flag mean both bare words
+  reach the external subcommand, where they used to come back as "no repo
+  registered under alias `help`". They are intercepted before the passthrough,
+  and both names are in `RESERVED_ALIASES`, so no alias is shadowed by it.
 - **`grit <command> --help` is where the worked examples live.** The README
   points at it rather than repeating it, so a command added without an
   `after_help` block is a documentation regression, and

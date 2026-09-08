@@ -29,6 +29,7 @@ Examples:
   grit docs commit -am \"changelog\"         run git in the docs repo
   grit @release fetch                      fetch every repo tagged release
   grit -k @release fetch                   keep going when one of them fails
+  grit help status                         same as `grit status --help`
 
 Seeing the dashboard without asking for it:
   grit shell enable                        add the integration to your rc file
@@ -211,7 +212,13 @@ pub struct Cli {
     ///
     /// Must precede the target — everything after `grit @release` belongs to
     /// the command being run.
-    #[arg(short = 'k', long, global = true)]
+    ///
+    /// Deliberately not `global`. Only the fan-out reads it, and a global flag
+    /// is listed in every subcommand's help, so `grit show --help` used to
+    /// advertise "keep going after a repo fails" on a command that has no
+    /// fan-out to keep going with. `--color` is global because every command
+    /// paints; this one is not.
+    #[arg(short = 'k', long)]
     pub keep_going: bool,
 
     #[command(subcommand)]
@@ -564,6 +571,29 @@ mod tests {
             assert!(
                 AFTER_HELP.contains(name),
                 "`grit --help` does not mention {name}"
+            );
+        }
+    }
+
+    /// `-k` is read only by the group fan-out. It used to be `global`, which
+    /// makes clap offer it on every subcommand's help — so `grit show --help`
+    /// advertised "keep going after a repo fails" on a command with no repos
+    /// to keep going over, and `grit show -k` exited 0 having done nothing.
+    #[test]
+    fn keep_going_belongs_to_the_fan_out_and_not_to_every_command() {
+        assert!(
+            Cli::try_parse_from(normalize_args(["grit", "-k", "@release", "fetch"])).is_ok(),
+            "the form the docs advertise has to keep working"
+        );
+
+        for args in [
+            ["grit", "show", "-k"].as_slice(),
+            ["grit", "status", "-k"].as_slice(),
+            ["grit", "shell", "init", "zsh", "-k"].as_slice(),
+        ] {
+            assert!(
+                Cli::try_parse_from(normalize_args(args.to_vec())).is_err(),
+                "{args:?} should be a usage error, not a silent no-op"
             );
         }
     }

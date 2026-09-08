@@ -176,8 +176,12 @@ script can tell that apart from an empty registry.
 
 `show` and `status` both take `--tag <TAG>` and `--json`; `status` also takes a
 list of aliases and `--cached`. `register` takes `--tag` and `--force`, and
-`shell enable`/`disable` take `--file`. `--color <auto|always|never>` and `-k`
-are global.
+`shell enable`/`disable` take `--file`. `--color <auto|always|never>` is
+global; `-k` belongs to the fan-out and goes before the target, as in
+`grit -k @release fetch`.
+
+`grit help` and `grit help <command>` work as well as `--help` does, and
+`grit version` as well as `--version`.
 
 Every command carries its own worked examples, so the exhaustive reference
 ships with the binary instead of drifting from it here:
@@ -188,6 +192,7 @@ grit status --help          # each flag, and how to read the table
 grit register --help        # paths, tags, moving an alias somewhere new
 grit show --help            # reading the JSON from a script
 grit shell enable --help    # which file, and the block it writes
+grit help shell enable      # the same thing, spelled the other way
 ```
 
 ### Reading the dashboard
