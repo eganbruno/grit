@@ -17,34 +17,103 @@
 
 use anyhow::Result;
 
-use crate::cli::{Shell, ShellArgs, ShellCommand, ShellPreviewArgs, ShellRefreshArgs};
+use crate::cli::{ShellArgs, ShellCommand, ShellPreviewArgs, ShellRefreshArgs, ShellSetupArgs};
 use crate::context::Ctx;
-use crate::render::{Theme, footer, zsh_style};
+use crate::render::{Theme, footer, paint, zsh_style};
+use crate::shell::{self, Change, Shell};
 
 use super::status;
 
 pub fn run(args: &ShellArgs, ctx: &mut Ctx) -> Result<i32> {
     match &args.command {
         ShellCommand::Init(init) => {
-            print!("{}", script(init.shell));
+            print!("{}", shell::script(init.shell));
             Ok(0)
         }
+        ShellCommand::Enable(setup) => enable(setup, ctx),
+        ShellCommand::Disable(setup) => disable(setup, ctx),
         ShellCommand::Preview(preview_args) => preview(preview_args, ctx),
         ShellCommand::Refresh(refresh_args) => refresh(refresh_args, ctx),
     }
 }
 
-/// The integration for a shell, embedded at build time.
+/// Which shell to set up, and which file to write.
 ///
-/// Kept as real files under `src/shell/` rather than string literals so a shell
-/// syntax checker, an editor and a reviewer all see them as the shell code they
-/// are. `tests/cli_shell.rs` runs `zsh -n` over the output for that reason.
-fn script(shell: Shell) -> &'static str {
-    match shell {
-        Shell::Zsh => include_str!("../shell/grit.zsh"),
-        Shell::Bash => include_str!("../shell/grit.bash"),
-        Shell::Fish => include_str!("../shell/grit.fish"),
+/// An unrecognised `$SHELL` is worth a sentence rather than a guess: writing
+/// zsh's integration into someone's bash startup file would leave them with an
+/// error on every prompt and no idea where it came from.
+fn target(setup: &ShellSetupArgs) -> Result<(Shell, std::path::PathBuf)> {
+    let shell = match setup.shell.or_else(Shell::from_env) {
+        Some(shell) => shell,
+        None => anyhow::bail!(
+            "could not tell which shell you use from $SHELL\n\
+             say which: grit shell enable zsh"
+        ),
+    };
+
+    let path = match &setup.file {
+        Some(path) => path.clone(),
+        None => shell::rc_path(shell)?,
+    };
+    Ok((shell, path))
+}
+
+fn enable(setup: &ShellSetupArgs, ctx: &mut Ctx) -> Result<i32> {
+    let (shell, path) = target(setup)?;
+    let shown = crate::registry::abbreviate_home(&path);
+
+    match shell::enable(&path, shell)? {
+        Change::Added => {
+            println!(
+                "added the {shell} integration to {}",
+                paint(&shown, Theme::path(), ctx.color)
+            );
+            println!(
+                "  {} type `grit`, pause, and the dashboard appears under the line",
+                paint("·", Theme::muted(), ctx.color)
+            );
+            println!(
+                "  {} start a new shell to pick it up, or run: exec {shell}",
+                paint("·", Theme::muted(), ctx.color)
+            );
+        }
+        Change::AlreadyEnabled => {
+            println!("the {shell} integration is already in {shown}");
+        }
+        Change::Managed => {
+            println!("{shown} already loads the integration on a line grit did not write");
+            println!("  nothing to do — it is left alone rather than duplicated");
+        }
+        Change::Removed | Change::NotEnabled => unreachable!("enable only adds"),
     }
+    Ok(0)
+}
+
+fn disable(setup: &ShellSetupArgs, ctx: &mut Ctx) -> Result<i32> {
+    let (shell, path) = target(setup)?;
+    let shown = crate::registry::abbreviate_home(&path);
+
+    match shell::disable(&path)? {
+        Change::Removed => {
+            println!(
+                "removed the {shell} integration from {}",
+                paint(&shown, Theme::path(), ctx.color)
+            );
+            println!(
+                "  {} open shells keep it until they are restarted",
+                paint("·", Theme::muted(), ctx.color)
+            );
+        }
+        Change::NotEnabled => {
+            println!("the {shell} integration is not in {shown}");
+        }
+        Change::Managed => {
+            println!("{shown} loads the integration on a line grit did not write");
+            println!("  remove that line yourself — grit will not edit what it did not add");
+        }
+        Change::Added | Change::AlreadyEnabled => unreachable!("disable only removes"),
+    }
+    Ok(0)
 }
 
 /// The cached dashboard, as the line editor needs it.
@@ -159,19 +228,6 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser as _;
-
-    /// Every script has to survive being embedded and printed back out.
-    #[test]
-    fn every_shell_has_a_script() {
-        for shell in [Shell::Zsh, Shell::Bash, Shell::Fish] {
-            let text = script(shell);
-            assert!(!text.is_empty(), "{shell:?} has an empty script");
-            assert!(
-                text.contains("grit shell"),
-                "{shell:?}'s script never calls back into grit"
-            );
-        }
-    }
 
     /// The hidden subcommands are still real ones, reachable the ordinary way.
     #[test]

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::render::ColorChoice;
+use crate::shell::Shell;
 
 /// Shown under the generated help.
 ///
@@ -155,12 +156,19 @@ pub struct ShellArgs {
     pub command: ShellCommand,
 }
 
-/// `init` is the part anyone types. The other two are the protocol the emitted
-/// script speaks back to grit, and are hidden because a human has no use for
-/// them — but they are ordinary commands, not a private channel, so a curious
-/// user running one gets something sensible rather than a panic.
+/// `enable`, `disable` and `init` are the parts anyone types. The other two are
+/// the protocol the emitted script speaks back to grit, and are hidden because a
+/// human has no use for them — but they are ordinary commands, not a private
+/// channel, so a curious user running one gets something sensible rather than a
+/// panic.
 #[derive(Debug, Subcommand)]
 pub enum ShellCommand {
+    /// Add the integration to your shell's startup file.
+    Enable(ShellSetupArgs),
+
+    /// Take the integration back out of your shell's startup file.
+    Disable(ShellSetupArgs),
+
     /// Print the integration for a shell. Feed it to `eval` from your rc file.
     Init(ShellInitArgs),
 
@@ -179,12 +187,18 @@ pub struct ShellInitArgs {
     pub shell: Shell,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum Shell {
-    Zsh,
-    Bash,
-    Fish,
+#[derive(Debug, Args)]
+pub struct ShellSetupArgs {
+    /// Which shell. Defaults to the one `$SHELL` names.
+    #[arg(value_enum)]
+    pub shell: Option<Shell>,
+
+    /// Edit this file instead of the shell's usual startup file.
+    ///
+    /// What `GRIT_CONFIG` is for the registry: a way to exercise this without
+    /// writing to the startup file of whoever is running the tests.
+    #[arg(long, value_name = "PATH")]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

@@ -13,6 +13,7 @@
 //! | [`commands`] | one file per command; the only layer that prints |
 //! | [`registry`] | the set of registered repos, and its file on disk |
 //! | [`vcs`] | the [`vcs::Vcs`] trait and its backends |
+//! | [`shell`] | the prompt integration, and installing it |
 //! | [`render`] | tables, colours and symbols |
 //!
 //! Dependencies point downwards only: `commands` uses `registry`, `vcs` and
@@ -25,6 +26,7 @@ pub mod context;
 pub mod error;
 pub mod registry;
 pub mod render;
+pub mod shell;
 pub mod vcs;
 
 pub use error::{Error, Result};

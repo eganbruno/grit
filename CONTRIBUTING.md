@@ -33,7 +33,7 @@ src/
   registry/       the set of registered repos and its file on disk
   vcs/            the Vcs trait and its backends
   render/         tables, colours, symbols
-  shell/          the integration scripts, embedded with include_str!
+  shell/          the integration scripts, and installing them into an rc file
 tests/
   common/mod.rs   TestEnv — a temp registry and throwaway git repos
   cli_*.rs        one file per command, plus one per VCS backend

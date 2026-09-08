@@ -104,7 +104,19 @@ $ grit
 ```
 
 You wanted to know the state of things *before* deciding what to type, which is
-the wrong way round from running a command to find out. Add this to `~/.zshrc`:
+the wrong way round from running a command to find out. Turn it on with:
+
+```bash
+grit shell enable
+```
+
+That adds a marked block to your shell's startup file and tells you which file
+it touched; `grit shell disable` takes exactly that block back out. It edits a
+startup file when you ask it to and at no other time — installing grit changes
+nothing on its own. `grit shell enable zsh` if `$SHELL` is not the shell you
+mean, and `--file` to write somewhere else.
+
+If you would rather add the line yourself, that is all the block contains:
 
 ```bash
 eval "$(grit shell init zsh)"
@@ -122,16 +134,17 @@ alone, so an auto-logout you have configured keeps working.
 | Setting | |
 | --- | --- |
 | `GRIT_PREVIEW_TRIGGERS` | array of buffers that summon it. Default `(grit)`. |
-| `GRIT_PREVIEW_DELAY` | whole seconds of stillness first. Default `1`. |
+| `GRIT_PREVIEW_DELAY` | seconds of stillness first; fractions allowed. Default `0.5`. |
 | `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G`; empty binds nothing. |
 | `GRIT_PREVIEW_IDLE` | `0` for the key only, no timer. |
 
 **bash and fish** get `Ctrl-G` instead of the pause, because neither runs a hook
-while you sit at the prompt:
+while you sit at the prompt. `grit shell enable` handles them too, writing the
+right line for the shell into the right file:
 
 ```bash
-eval "$(grit shell init bash)"    # ~/.bashrc
-grit shell init fish | source     # ~/.config/fish/config.fish
+grit shell enable bash            # ~/.bashrc
+grit shell enable fish            # ~/.config/fish/config.fish
 ```
 
 The cached dashboard is a command in its own right, and cheap enough for a

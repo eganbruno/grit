@@ -316,3 +316,169 @@ fn backdate(cache: &Path, when: &str) {
     value["captured_at"] = serde_json::Value::String(when.to_string());
     std::fs::write(cache, value.to_string()).expect("rewrite the cache");
 }
+
+// `enable` and `disable` — the step that used to be a line to copy by hand.
+//
+// Every one of these writes to a file under the test's own directory via
+// `--file`. Nothing here may touch the startup file of whoever is running the
+// suite, which is exactly what the flag is for.
+
+/// The startup file this test is allowed to write.
+fn rc(env: &TestEnv) -> std::path::PathBuf {
+    env.root().join("startup")
+}
+
+fn setup(env: &TestEnv, action: &str, shell: &str) -> String {
+    let out = env
+        .grit()
+        .args(["shell", action, shell, "--file"])
+        .arg(rc(env))
+        .output()
+        .expect("run grit shell");
+    assert!(
+        out.status.success(),
+        "grit shell {action} failed: {}",
+        common::describe(&out)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn enabling_writes_a_line_that_loads_the_integration() {
+    let env = TestEnv::new();
+    std::fs::write(rc(&env), "setopt nomatch\n").unwrap();
+
+    let said = setup(&env, "enable", "zsh");
+    let contents = std::fs::read_to_string(rc(&env)).unwrap();
+
+    assert!(said.contains("added"), "{said}");
+    assert!(
+        contents.contains(r#"eval "$(grit shell init zsh)""#),
+        "{contents}"
+    );
+    assert!(contents.starts_with("setopt nomatch\n"), "{contents}");
+}
+
+#[test]
+fn what_it_writes_is_valid_shell() {
+    // The point of writing it rather than printing it: nobody proofreads a
+    // startup file, so a stray quote here is a broken login shell.
+    if !available("zsh") {
+        eprintln!("skipping: zsh is not installed");
+        return;
+    }
+    let env = TestEnv::new();
+    setup(&env, "enable", "zsh");
+
+    let out = Command::new("zsh")
+        .arg("-n")
+        .arg(rc(&env))
+        .output()
+        .expect("run zsh -n");
+    assert!(
+        out.status.success(),
+        "zsh -n rejected it: {}",
+        common::describe(&out)
+    );
+}
+
+#[test]
+fn enabling_twice_leaves_one_copy() {
+    let env = TestEnv::new();
+    setup(&env, "enable", "zsh");
+    let once = std::fs::read_to_string(rc(&env)).unwrap();
+
+    let said = setup(&env, "enable", "zsh");
+
+    assert!(said.contains("already"), "{said}");
+    assert_eq!(std::fs::read_to_string(rc(&env)).unwrap(), once);
+}
+
+#[test]
+fn disabling_gives_back_the_file_it_started_as() {
+    let env = TestEnv::new();
+    let original = "export PATH=/usr/bin\nsetopt nomatch\n";
+    std::fs::write(rc(&env), original).unwrap();
+
+    setup(&env, "enable", "zsh");
+    setup(&env, "disable", "zsh");
+
+    assert_eq!(std::fs::read_to_string(rc(&env)).unwrap(), original);
+}
+
+#[test]
+fn disabling_something_never_enabled_says_so_and_writes_nothing() {
+    let env = TestEnv::new();
+    std::fs::write(rc(&env), "setopt nomatch\n").unwrap();
+
+    let said = setup(&env, "disable", "zsh");
+
+    assert!(said.contains("not in"), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(rc(&env)).unwrap(),
+        "setopt nomatch\n"
+    );
+}
+
+#[test]
+fn a_line_grit_did_not_write_is_reported_rather_than_edited() {
+    let env = TestEnv::new();
+    let by_hand = "eval \"$(grit shell init zsh)\"\n";
+    std::fs::write(rc(&env), by_hand).unwrap();
+
+    let enabled = setup(&env, "enable", "zsh");
+    assert!(enabled.contains("did not write"), "{enabled}");
+    assert_eq!(std::fs::read_to_string(rc(&env)).unwrap(), by_hand);
+
+    let disabled = setup(&env, "disable", "zsh");
+    assert!(disabled.contains("did not write"), "{disabled}");
+    assert_eq!(std::fs::read_to_string(rc(&env)).unwrap(), by_hand);
+}
+
+#[test]
+fn a_startup_file_that_does_not_exist_yet_is_created() {
+    let env = TestEnv::new();
+    let nested = env.root().join("nested").join("deeper").join("config.fish");
+
+    env.grit()
+        .args(["shell", "enable", "fish", "--file"])
+        .arg(&nested)
+        .assert()
+        .success();
+
+    let contents = std::fs::read_to_string(&nested).unwrap();
+    // fish has no `eval "$(...)"`.
+    assert!(
+        contents.contains("grit shell init fish | source"),
+        "{contents}"
+    );
+}
+
+#[test]
+fn the_shell_is_taken_from_the_environment_when_it_is_not_given() {
+    let env = TestEnv::new();
+
+    env.grit()
+        .env("SHELL", "/opt/homebrew/bin/fish")
+        .args(["shell", "enable", "--file"])
+        .arg(rc(&env))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fish"));
+}
+
+#[test]
+fn a_shell_grit_has_no_script_for_is_refused_rather_than_guessed() {
+    // Writing zsh's script into a nushell config would break every prompt.
+    let env = TestEnv::new();
+
+    env.grit()
+        .env("SHELL", "/usr/bin/nushell")
+        .args(["shell", "enable", "--file"])
+        .arg(rc(&env))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("which shell"));
+
+    assert!(!rc(&env).exists(), "it wrote a file anyway");
+}
