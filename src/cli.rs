@@ -176,11 +176,15 @@ grit changes nothing on its own. `disable` removes only the marked block that
 zsh draws the table after a pause. bash and fish bind ^G instead, because
 neither runs a hook while you sit at the prompt.
 
-Tuning the zsh integration, in your rc file after the eval:
+Tuning the zsh integration, set *before* the eval:
   GRIT_PREVIEW_TRIGGERS=( grit gs )     buffers that summon it   (grit)
   GRIT_PREVIEW_DELAY=0.2                seconds of stillness     (0.5)
-  GRIT_PREVIEW_KEY='^G'                 draw it on demand; empty binds nothing
+  GRIT_PREVIEW_KEY='^T'                 draw it on demand        (^G)
   GRIT_PREVIEW_IDLE=0                   the key only, no timer
+
+Before, because the key is bound as the script is sourced — set it afterwards
+and the binding is already made. The other three are read as you type, so they
+do take effect later; setting all four up front is the rule that always holds.
 ";
 
 #[derive(Debug, Parser)]

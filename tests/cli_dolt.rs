@@ -145,10 +145,10 @@ fn a_branch_ahead_of_its_upstream_shows_the_count() {
     needs_dolt!();
     let env = TestEnv::new();
     let origin = env.dolt_repo("origin");
-    let clone = env.dolt_clone_of(&origin, "clone");
+    let clone = env.dolt_clone_of(&origin, "local");
 
     env.dolt_commit(&clone, "insert into items values (2, 'b')", "ahead one");
-    env.register("clone", &clone, &[]);
+    env.register("local", &clone, &[]);
 
     let out = env.grit().args(["status", "--json"]).output().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -162,14 +162,14 @@ fn a_branch_behind_its_upstream_shows_the_count() {
     needs_dolt!();
     let env = TestEnv::new();
     let origin = env.dolt_repo("origin");
-    let clone = env.dolt_clone_of(&origin, "clone");
+    let clone = env.dolt_clone_of(&origin, "local");
 
     // Advance the remote past the clone, then let the clone see it.
     env.dolt_commit(&origin, "insert into items values (3, 'c')", "moved on");
     env.dolt(&origin, &["push", "origin", "main"]);
     env.dolt(&clone, &["fetch"]);
 
-    env.register("clone", &clone, &[]);
+    env.register("local", &clone, &[]);
 
     let out = env.grit().args(["status", "--json"]).output().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -295,7 +295,8 @@ impl SqlServer {
     /// — that is the observable difference the server makes, and the thing
     /// under test. Before it is up, `dolt sql` opens the database directly and
     /// answers with native JSON types.
-    fn start(env: &TestEnv, repo: &Path, port: u16) -> Self {
+    fn start(env: &TestEnv, repo: &Path) -> Self {
+        let port = free_port();
         let child = env
             .dolt_command(repo, &["sql-server", "--port", &port.to_string()])
             .stdout(Stdio::null())
@@ -317,6 +318,21 @@ impl SqlServer {
     }
 }
 
+/// A port nobody is listening on, by having the OS pick one and letting go.
+///
+/// There is a race between the drop and the server's bind, and it is the lesser
+/// problem: a fixed port collides with a second checkout, a matrix entry on the
+/// same host, or a server left behind by an interrupted run — and it fails as
+/// "did not start serving within 20s", which reads as dolt being slow rather
+/// than as the port being taken.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind an ephemeral port")
+        .local_addr()
+        .expect("read back the bound port")
+        .port()
+}
+
 impl Drop for SqlServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -336,7 +352,7 @@ fn a_database_held_by_a_sql_server_still_reads() {
     env.dolt_sql(&repo, "insert into items values (1, 'a')");
     env.register("data", &repo, &[]);
 
-    let _server = SqlServer::start(&env, &repo, 15799);
+    let _server = SqlServer::start(&env, &repo);
 
     let out = env.grit().args(["status", "--json"]).output().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();

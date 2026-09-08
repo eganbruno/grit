@@ -71,15 +71,15 @@ fn a_stash_shows_up_even_when_the_tree_is_otherwise_clean() {
 fn a_branch_ahead_of_its_upstream_shows_the_count() {
     let env = TestEnv::new();
     let origin = env.repo("origin");
-    let clone = env.clone_of(&origin, "clone");
-    env.register("clone", &clone, &[]);
+    let clone = env.clone_of(&origin, "local");
+    env.register("local", &clone, &[]);
 
     env.commit(&clone, "local.txt", "local\n", "local work");
 
     let out = env.grit().arg("status").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
 
-    assert_eq!(row(&stdout, "clone")[2], "↑1", "{stdout}");
+    assert_eq!(row(&stdout, "local")[2], "↑1", "{stdout}");
     assert!(stdout.contains("1 ahead"), "{stdout}");
 }
 
@@ -87,8 +87,8 @@ fn a_branch_ahead_of_its_upstream_shows_the_count() {
 fn a_branch_behind_its_upstream_shows_the_count() {
     let env = TestEnv::new();
     let origin = env.repo("origin");
-    let clone = env.clone_of(&origin, "clone");
-    env.register("clone", &clone, &[]);
+    let clone = env.clone_of(&origin, "local");
+    env.register("local", &clone, &[]);
 
     env.commit(&origin, "remote.txt", "remote\n", "upstream work");
     git(&clone, &["fetch", "--quiet"]);
@@ -96,7 +96,7 @@ fn a_branch_behind_its_upstream_shows_the_count() {
     let out = env.grit().arg("status").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
 
-    assert_eq!(row(&stdout, "clone")[2], "↓1", "{stdout}");
+    assert_eq!(row(&stdout, "local")[2], "↓1", "{stdout}");
     assert!(stdout.contains("1 behind"), "{stdout}");
 }
 

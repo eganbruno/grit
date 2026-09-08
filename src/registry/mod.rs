@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 /// without being listed here, so this cannot silently drift.
 pub const RESERVED_ALIASES: &[&str] = &[
     "add",
+    "clone",
     "completions",
     "help",
     "register",

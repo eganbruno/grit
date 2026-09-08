@@ -127,15 +127,18 @@ nothing to show, with a note in the footer saying how old the reading is. A
 refresh runs behind it, and a reading old enough to mislead is not shown at all
 — you get the fresh one a moment later instead.
 
-Nothing is running while you type: the timer is armed when the buffer becomes
-`grit` and cancelled the moment it stops being. `TMOUT` and `TRAPALRM` are left
-alone, so an auto-logout you have configured keeps working.
+Nothing runs unless the buffer is a trigger: the timer is armed when the buffer
+becomes `grit` and torn down the moment it stops being, so an ordinary line
+costs nothing at all. `TMOUT` and `TRAPALRM` are left alone, so an auto-logout
+you have configured keeps working.
 
-| Setting | |
+Set these *before* the `eval`, since the key is bound as the script is sourced:
+
+| Setting | What it does |
 | --- | --- |
 | `GRIT_PREVIEW_TRIGGERS` | array of buffers that summon it. Default `(grit)`. |
 | `GRIT_PREVIEW_DELAY` | seconds of stillness first; fractions allowed. Default `0.5`. |
-| `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G`; empty binds nothing. |
+| `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G` in zsh, `\C-g` in bash, `\cg` in fish. Setting it empty binds nothing in zsh; bash and fish fall back to the default. |
 | `GRIT_PREVIEW_IDLE` | `0` for the key only, no timer. |
 
 **bash and fish** get `Ctrl-G` instead of the pause, because neither runs a hook
