@@ -28,10 +28,159 @@ Examples:
   grit show                                aliases, paths and tags
   grit docs commit -am \"changelog\"         run git in the docs repo
   grit @release fetch                      fetch every repo tagged release
+  grit -k @release fetch                   keep going when one of them fails
 
 Seeing the dashboard without asking for it:
-  grit shell init zsh                      print the shell integration
-  eval \"$(grit shell init zsh)\"            type `grit`, pause, and the table appears
+  grit shell enable                        add the integration to your rc file
+  eval \"$(grit shell init zsh)\"            or write that line yourself
+
+Environment:
+  GRIT_CONFIG        the registry file  (default ~/.config/grit/config.toml)
+  GRIT_CACHE         the last reading   (default ~/.cache/grit/status.json)
+  XDG_CONFIG_HOME    moves both of those defaults, as does XDG_CACHE_HOME
+  NO_COLOR           set to anything non-empty to drop colour; see --color
+  COLUMNS            table width to assume when stdout is not a terminal
+
+Every command carries its own examples:
+  grit register --help   grit status --help   grit shell enable --help
+";
+/// Shown under `grit shell enable --help`.
+const ENABLE_HELP: &str = "\
+Examples:
+  grit shell enable                  the startup file for the shell $SHELL names
+  grit shell enable zsh              ~/.zshrc, or $ZDOTDIR/.zshrc if that is set
+  grit shell enable bash             ~/.bashrc
+  grit shell enable fish             ~/.config/fish/config.fish
+  grit shell enable --file ~/.zshrc.local     somewhere of your choosing
+
+It appends one marked block, and tells you which file it touched:
+
+  # >>> grit shell integration >>>
+  eval \"$(grit shell init zsh)\"
+  # <<< grit shell integration <<<
+
+Running it twice is harmless — an existing block is left as it is rather than
+added a second time. `grit shell disable` takes back exactly that block.
+";
+
+/// Shown under `grit shell disable --help`.
+const DISABLE_HELP: &str = "\
+Examples:
+  grit shell disable                 the startup file for the shell $SHELL names
+  grit shell disable zsh             name the shell yourself
+  grit shell disable --file ~/.zshrc.local     the file `enable --file` wrote
+
+Only the marked block that `enable` wrote is removed, matched by its markers.
+An `eval \"$(grit shell init …)\"` line you added by hand is reported and left
+alone: guessing where somebody's own line ends is how a tool eats a config.
+";
+
+/// Shown under `grit shell init --help`.
+const INIT_HELP: &str = "\
+Examples:
+  grit shell init zsh                print the zsh integration
+  eval \"$(grit shell init zsh)\"      what a startup file should contain
+  grit shell init zsh > ~/.grit.zsh  keep a copy and source that instead
+
+  grit shell init bash               ^G, since bash runs no hook while idle
+  grit shell init fish               ^G, for the same reason
+
+This only prints. It writes nothing and changes nothing; `grit shell enable`
+is the one that edits a file.
+";
+
+/// Shown under `grit register --help`.
+const REGISTER_HELP: &str = "\
+Examples:
+  grit -r api ~/code/api                    register that path as `api`
+  grit -r api                               register the current directory
+  grit -r api ~/code/api/src                any directory inside it will do
+  grit -r api ~/code/api -t release,backend two tags at once
+  grit -r api ~/code/api -t release -t web  the same, spelled out
+  grit -r api ~/moved/api --force           point an existing alias elsewhere
+  grit register api ~/code/api              the long form; `grit add` also works
+
+grit stores the repository *root*, whichever directory inside it you name, and
+works out whether that root is a git or a dolt repository by looking — you
+never say which. A dolt database inside a git working tree registers as the
+database. It has to be a directory: the path is where grit runs the detection,
+so naming a file in the repo is an error rather than a shorthand for its
+parent.
+";
+
+/// Shown under `grit remove --help`.
+const REMOVE_HELP: &str = "\
+Examples:
+  grit rm api                  forget one alias
+  grit rm api docs webapp      forget several at once
+  grit remove api              the long form
+
+Only grit's registry entry goes. The repository on disk is left alone.
+";
+
+/// Shown under `grit show --help`.
+const SHOW_HELP: &str = "\
+Examples:
+  grit show                    every registered repo: alias, kind, tags, path
+  grit show --tag release      just the repos tagged `release`
+  grit show --json             the same, machine-readable
+
+Reading the JSON in a script. It is an object — `repos`, plus the `config`
+file the answer came from — where `grit status --json` is a bare array:
+  grit show --json | jq -r '.repos[].path'
+  grit show --json | jq -r '.repos[] | select(.kind == \"dolt\") | .alias'
+  cd \"$(grit show --json | jq -r '.repos[] | select(.alias == \"api\") | .path')\"
+";
+
+/// Shown under `grit status --help`.
+const STATUS_HELP: &str = "\
+Examples:
+  grit status                  every registered repo
+  grit status api docs         just these two
+  grit status --tag release    just the repos tagged `release`
+  grit status --json           the full snapshot, machine-readable
+  grit status --cached         the last reading, in milliseconds
+
+Reading the table:
+  SYNC    ✓ in sync · ↑n ahead · ↓n behind · · no upstream to compare against
+  STATE   !n conflicts · ●n staged · ○n unstaged · ?n untracked · ⚑n stashes
+          `clean` when there is nothing to report, and `missing` when the
+          registered path is gone. An in-progress merge, rebase, cherry-pick,
+          revert or bisect is named here instead.
+
+--cached runs no git and no dolt at all, which is what makes it cheap enough
+for a shell prompt or a tmux status line. It prints nothing and exits non-zero
+when there is no reading yet, so a script can tell that apart from an empty
+registry:
+
+  grit status --cached || grit status     show the cache, or go and take one
+
+Only an unfiltered run refills that cache. A run narrowed by alias or by --tag
+leaves it untouched, so a partial reading can never pass itself off as the
+whole dashboard — which would read as `clean` rather than as `not looked at`.
+";
+
+/// Shown under `grit shell --help`.
+const SHELL_HELP: &str = "\
+Examples:
+  grit shell enable                     add it to the startup file for $SHELL
+  grit shell enable zsh                 name the shell yourself
+  grit shell enable --file ~/.zshrc     write to a particular file
+  grit shell disable                    take back exactly the block it wrote
+  grit shell init zsh                   print the integration, to eval yourself
+
+grit edits a startup file when you ask it to and at no other time — installing
+grit changes nothing on its own. `disable` removes only the marked block that
+`enable` wrote; a line you added yourself is reported rather than edited.
+
+zsh draws the table after a pause. bash and fish bind ^G instead, because
+neither runs a hook while you sit at the prompt.
+
+Tuning the zsh integration, in your rc file after the eval:
+  GRIT_PREVIEW_TRIGGERS=( grit gs )     buffers that summon it   (grit)
+  GRIT_PREVIEW_DELAY=0.2                seconds of stillness     (0.5)
+  GRIT_PREVIEW_KEY='^G'                 draw it on demand; empty binds nothing
+  GRIT_PREVIEW_IDLE=0                   the key only, no timer
 ";
 
 #[derive(Debug, Parser)]
@@ -68,20 +217,23 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Register a repository under an alias.
-    #[command(visible_alias = "add")]
+    #[command(visible_alias = "add", after_help = REGISTER_HELP)]
     Register(RegisterArgs),
 
     /// Forget a registered repository. The repository itself is untouched.
-    #[command(visible_alias = "rm")]
+    #[command(visible_alias = "rm", after_help = REMOVE_HELP)]
     Remove(RemoveArgs),
 
     /// Show every registered repository with its path and tags.
+    #[command(after_help = SHOW_HELP)]
     Show(ShowArgs),
 
     /// Dashboard: branch, sync state and working-tree state for each repo.
+    #[command(after_help = STATUS_HELP)]
     Status(StatusArgs),
 
     /// Shell integration — the dashboard, at the prompt, before you hit enter.
+    #[command(after_help = SHELL_HELP)]
     Shell(ShellArgs),
 
     /// `grit <alias|@tag> <args...>` — run the repo's VCS with those arguments.
@@ -97,7 +249,7 @@ pub struct RegisterArgs {
     /// Short name to refer to the repo by.
     pub alias: String,
 
-    /// Path to the repo. Any path inside it works; grit stores the root.
+    /// Path to the repo. Any directory inside it works; grit stores the root.
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
@@ -164,12 +316,15 @@ pub struct ShellArgs {
 #[derive(Debug, Subcommand)]
 pub enum ShellCommand {
     /// Add the integration to your shell's startup file.
+    #[command(after_help = ENABLE_HELP)]
     Enable(ShellSetupArgs),
 
     /// Take the integration back out of your shell's startup file.
+    #[command(after_help = DISABLE_HELP)]
     Disable(ShellSetupArgs),
 
     /// Print the integration for a shell. Feed it to `eval` from your rc file.
+    #[command(after_help = INIT_HELP)]
     Init(ShellInitArgs),
 
     /// The cached dashboard as plain text plus the ranges to colour.
@@ -336,6 +491,76 @@ mod tests {
                     "alias `{alias}` of `{name}` is missing from RESERVED_ALIASES"
                 );
             }
+        }
+    }
+
+    /// The tool documents itself: `grit <command> --help` is where the worked
+    /// examples live, so a command added without any is a documentation
+    /// regression and not a style nit. Hidden commands are exempt — they are
+    /// the protocol the shell script speaks, not something anyone types.
+    #[test]
+    fn every_visible_command_carries_examples() {
+        fn walk(cmd: &clap::Command, path: &str, missing: &mut Vec<String>) {
+            for sub in cmd.get_subcommands() {
+                if sub.is_hide_set() || sub.get_name() == "help" {
+                    continue;
+                }
+                let path = format!("{path} {}", sub.get_name());
+                let documented = sub
+                    .get_after_help()
+                    .is_some_and(|help| help.to_string().contains("Examples:"));
+                if !documented {
+                    missing.push(path.clone());
+                }
+                walk(sub, &path, missing);
+            }
+        }
+
+        let root = Cli::command();
+        assert!(
+            root.get_after_help()
+                .is_some_and(|help| help.to_string().contains("Examples:")),
+            "`grit --help` carries no examples"
+        );
+
+        let mut missing = Vec::new();
+        walk(&root, "grit", &mut missing);
+        assert!(
+            missing.is_empty(),
+            "no `Examples:` in the help for: {missing:?}"
+        );
+    }
+
+    /// `ENABLE_HELP` shows the block `shell enable` writes, markers and all.
+    /// That is a copy of two constants, and the whole property of a copy is
+    /// that it can drift — leaving the help confidently describing a block
+    /// `disable` would no longer recognise.
+    #[test]
+    fn the_enable_help_quotes_the_real_block_markers() {
+        for marker in [crate::shell::BEGIN, crate::shell::END] {
+            assert!(
+                ENABLE_HELP.contains(marker),
+                "`shell enable` help does not show the marker it writes: {marker}"
+            );
+        }
+    }
+
+    /// Every environment variable the root help advertises has to be one grit
+    /// actually reads. The two `GRIT_*` names are consts; the rest are read
+    /// inline, so this at least pins the spelling against a typo.
+    #[test]
+    fn the_advertised_environment_variables_are_the_real_ones() {
+        for name in [
+            crate::registry::CONFIG_ENV,
+            crate::cache::CACHE_ENV,
+            "XDG_CONFIG_HOME",
+            "NO_COLOR",
+            "COLUMNS",
+        ] {
+            assert!(
+                AFTER_HELP.contains(name),
+                "`grit --help` does not mention {name}"
+            );
         }
     }
 

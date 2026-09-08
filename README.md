@@ -52,8 +52,8 @@ and Intel/x86.
 
 ## Quick start
 
-Register the repos you work across. Any path inside a repo works — grit stores
-the root — and `--tag` puts repos into groups.
+Register the repos you work across. Any directory inside a repo works — grit
+stores the root — and `--tag` puts repos into groups.
 
 ```bash
 grit -r api       ~/code/api       --tag release,backend
@@ -161,16 +161,31 @@ script can tell that apart from an empty registry.
 
 | Command | What it does |
 | --- | --- |
-| `grit -r <alias> [path]` | Register a repo. `path` defaults to `.`. Long form: `grit register`. |
-| `grit rm <alias>...` | Forget an alias. The repository itself is untouched. |
+| `grit -r <alias> [path]` | Register a repo. `path` defaults to `.`. Long forms: `grit register`, `grit add`. |
+| `grit rm <alias>...` | Forget an alias. The repository itself is untouched. Long form: `grit remove`. |
 | `grit show` | Every registered repo: alias, kind, tags, path. |
-| `grit status` | Branch, sync state and working-tree state for each repo. |
-| `grit <alias> <args...>` | Run git in that repo with those arguments. |
+| `grit status [alias...]` | Branch, sync state and working-tree state for each repo. |
+| `grit <alias> <args...>` | Run the repo's own VCS there, with those arguments. |
 | `grit @<tag> <args...>` | Run it in every repo carrying that tag. |
-| `grit shell init <shell>` | Print the shell integration. `zsh`, `bash` or `fish`. |
+| `grit shell enable [shell]` | Add the integration to your shell's startup file. |
+| `grit shell disable [shell]` | Take exactly that block back out. |
+| `grit shell init <shell>` | Print the integration. `zsh`, `bash` or `fish`. |
 
-`show` and `status` both take `--tag <TAG>` and `--json`. `status` also takes a
-list of aliases (`grit status api docs`) and `--cached`.
+`show` and `status` both take `--tag <TAG>` and `--json`; `status` also takes a
+list of aliases and `--cached`. `register` takes `--tag` and `--force`, and
+`shell enable`/`disable` take `--file`. `--color <auto|always|never>` and `-k`
+are global.
+
+Every command carries its own worked examples, so the exhaustive reference
+ships with the binary instead of drifting from it here:
+
+```bash
+grit --help                 # the map, and every environment variable
+grit status --help          # each flag, and how to read the table
+grit register --help        # paths, tags, moving an alias somewhere new
+grit show --help            # reading the JSON from a script
+grit shell enable --help    # which file, and the block it writes
+```
 
 ### Reading the dashboard
 
@@ -215,11 +230,16 @@ tags = ["backend", "release"]
 added_at = "2026-08-03T11:49:22Z"
 ```
 
-Colour follows [`NO_COLOR`](https://no-color.org) and switches off when stdout
-is not a terminal. `--color always|never|auto` overrides both.
+`$XDG_CONFIG_HOME` moves that default, and grit deliberately uses the
+XDG location on macOS too — `~/Library/Application Support` is right for a GUI
+app, but a CLI's config belongs where you can dotfile-manage it.
 
-The last dashboard is cached under `~/.cache/grit/status.json`, or wherever
-`$GRIT_CACHE` points. Deleting it costs one `grit status`. It is refused rather
+Colour follows [`NO_COLOR`](https://no-color.org) and switches off when stdout
+is not a terminal. `--color always|never|auto` overrides both. When stdout is
+not a terminal there is no width to measure, so `$COLUMNS` is used if set.
+
+The last dashboard is cached under `~/.cache/grit/status.json` — or wherever
+`$GRIT_CACHE` points, or `$XDG_CACHE_HOME` moves it to. Deleting it costs one `grit status`. It is refused rather
 than trusted whenever the registry has changed since it was written, so a repo
 you have just removed can never appear in a preview.
 

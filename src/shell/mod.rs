@@ -79,8 +79,8 @@ pub fn eval_line(shell: Shell) -> String {
 
 /// Markers around what grit wrote, so `disable` can take back exactly that and
 /// nothing a person put next to it.
-const BEGIN: &str = "# >>> grit shell integration >>>";
-const END: &str = "# <<< grit shell integration <<<";
+pub(crate) const BEGIN: &str = "# >>> grit shell integration >>>";
+pub(crate) const END: &str = "# <<< grit shell integration <<<";
 
 /// What grit found, and what it did about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

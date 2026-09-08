@@ -24,7 +24,19 @@ same for the status cache.
   `Registry` and `trait Vcs`. Reaching for `std::process::Command` inside
   `commands/` means the abstraction is being bypassed.
 - **`RESERVED_ALIASES` in `src/registry/mod.rs` must list every subcommand and
-  alias.** `cli::tests::every_subcommand_is_reserved` enforces it.
+  alias.** `cli::tests::every_subcommand_is_reserved` enforces it. It also
+  reserves two names — `completions` and `run` — that are not subcommands yet,
+  so nobody's alias can shadow them later; the test only runs one way.
+- **`grit <command> --help` is where the worked examples live.** The README
+  points at it rather than repeating it, so a command added without an
+  `after_help` block is a documentation regression, and
+  `cli::tests::every_visible_command_carries_examples` fails on one. Where the
+  help quotes a constant — the block `shell enable` writes, the environment
+  variables it lists — a test compares the two, because a copy is precisely the
+  thing that drifts. Anything in there is shipped documentation: run the
+  examples before changing them, which is how the `grit show --json` ones came
+  to say `.repos[]` (that command answers with an object; `grit status --json`
+  is the one that answers with an array).
 - **`normalize_args` in `src/cli.rs` reads the flag list off the clap grammar**
   rather than hardcoding it, so `-r` keeps working when a global flag is added.
   Do not replace it with a hardcoded list.

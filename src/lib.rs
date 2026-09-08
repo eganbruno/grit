@@ -11,6 +11,8 @@
 //! | [`cache`] | the last dashboard read, so one can be shown instantly |
 //! | [`cli`] | the command-line grammar, and nothing else |
 //! | [`commands`] | one file per command; the only layer that prints |
+//! | [`context`] | `Ctx` — the registry, colour choice and terminal width |
+//! | [`error`] | [`Error`], the typed error every layer returns |
 //! | [`registry`] | the set of registered repos, and its file on disk |
 //! | [`vcs`] | the [`vcs::Vcs`] trait and its backends |
 //! | [`shell`] | the prompt integration, and installing it |
