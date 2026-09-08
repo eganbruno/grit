@@ -40,6 +40,10 @@
 #   * The trigger is decided when the timer is armed and checked again inside
 #     the widget. That second check is what makes a timer outliving its line
 #     harmless, and it is why the handler calls a widget rather than drawing.
+#   * A watch is removed with `zle -F <fd>` and no handler. `zle -F -<fd>` is a
+#     parse error, not a negation — and a watch left on a closed descriptor
+#     starves every other watch in ZLE's select set, which is somebody else's
+#     prompt hanging on "loading" for the life of the shell.
 #   * The clear in `line-pre-redraw` is unconditional and first. accept-line
 #     redraws while the buffer is still the trigger, so a clear behind an `if`
 #     leaves the table stranded above the command's own output.
@@ -172,12 +176,10 @@ zle -N _grit_preview_toggle
 # Open a descriptor that goes readable every `GRIT_PREVIEW_DELAY`, and have ZLE
 # wake us on it.
 #
-# One subshell that keeps ticking, rather than a fresh one per tick, and that is
-# not a saving — it is the only arrangement that works. A `zle -F` installed
-# from inside a `zle -F` handler is accepted and then never fires: ZLE is
-# already blocked in its select by then and does not revisit the descriptor set
-# until a key arrives, which for an idle line is never. So the descriptor has to
-# outlive the tick that woke us, and stopping is our job rather than the
+# One subshell that keeps ticking, rather than a fresh one per tick. A handler
+# re-arming itself does work — measured, once the removal below was correct —
+# so this is a choice and not a necessity: one fork per line of typing rather
+# than one per half second, and stopping is then our job rather than the
 # sleeper's.
 _grit_preview_arm() {
 	(( _grit_preview_armed )) && return 0
@@ -217,7 +219,16 @@ _grit_preview_disarm() {
 _grit_preview_release() {
 	_grit_preview_armed=0
 	(( _grit_preview_fd )) || return 0
-	zle -F -$_grit_preview_fd 2>/dev/null
+
+	# `zle -F <fd>` with the handler left off is how a watch is removed.
+	# `zle -F -<fd>` is not the negation of anything: it is a parse error
+	# ("Bad file descriptor number"), and with stderr thrown away it looks
+	# exactly like success. The descriptor then gets closed underneath a watch
+	# that is still installed, and a dead descriptor in ZLE's select set starves
+	# *every* watch in it — including the one powerlevel10k's gitstatus uses for
+	# its daemon, which is left saying "loading" for the life of the shell.
+	zle -F $_grit_preview_fd 2>/dev/null
+
 	exec {_grit_preview_fd}<&- 2>/dev/null
 	_grit_preview_fd=0
 	return 0

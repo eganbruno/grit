@@ -335,6 +335,47 @@ def zsh_neighbours_suite(grit, report, autosuggestions=None):
                  "ALIAS" not in flatten(sh.read(0.4)))
     sh.close()
 
+
+    # The preview is not the only thing in the shell watching a descriptor:
+    # powerlevel10k's gitstatus waits on its daemon exactly this way. A watch
+    # grit forgets to remove is left pointing at a descriptor it has closed, and
+    # one dead descriptor in ZLE's select set stops *every* watch in it being
+    # serviced — which reads, to whoever is running the prompt, as a git segment
+    # stuck on "loading" that never updates again.
+    rc = fx.rc("neighbour.zsh",
+               f"PS1='%% '\n"
+               "zmodload -F zsh/zselect b:zselect\n"
+               # a stand-in for gitstatus: its own watch, counting what it gets
+               "typeset -gi _nb_ticks=0 _nb_fd=0\n"
+               "_nb_handler() { read -r -k1 -u $1 _j 2>/dev/null; (( _nb_ticks++ )); }\n"
+               "exec {_nb_fd}< <(while :; do zselect -t 30 2>/dev/null; print -n x || break; done)\n"
+               "zle -F $_nb_fd _nb_handler\n"
+               f"eval \"$({fx.grit} shell init zsh)\"\n")
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+
+    # Draw and tear down through each of the three exits.
+    for exit_key in ("\x7f\x7f\x7f\x7f", "\r", "\x03"):
+        sh.send("grit")
+        sh.read(1.4)
+        sh.send(exit_key)
+        sh.read(1.0)
+
+    left = sh.run("print -r -- \"OWN=<$(zle -FL | grep _grit_preview)>\"", 1.5)
+    report.check("no descriptor watch survives a teardown",
+                 "OWN=<>" in left, left.strip())
+
+    before = sh.run('print -r -- "N=$_nb_ticks"', 1.0)
+    sh.read(1.5)
+    after = sh.run('print -r -- "N=$_nb_ticks"', 1.0)
+    def ticks(text):
+        m = re.search(r"N=(\d+)", text)
+        return int(m.group(1)) if m else -1
+    report.check("a neighbour's watch is still being serviced afterwards",
+                 ticks(after) > ticks(before) >= 0,
+                 f"{ticks(before)} -> {ticks(after)}")
+    sh.close()
+
     if autosuggestions and os.path.exists(autosuggestions):
         rc = fx.rc("suggest.zsh",
                    f"PS1='%% '\nsource {autosuggestions}\n"

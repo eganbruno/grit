@@ -83,11 +83,17 @@ line you are typing. Four things hold it up, and each is easy to undo:
   longer `zsh/sched`. `src/shell/grit.zsh` says why at length; the short version
   is that `sched` cannot express a delay under a second (`sched +0.5` is a parse
   error) and the default is 0.5. Three things about the replacement bite:
-  - **a `zle -F` installed from inside a `zle -F` handler never fires.** ZLE is
-    already blocked in its select and does not revisit the descriptor set until
-    a key arrives. So the sleeper is one subshell that keeps ticking and
-    stopping is grit's job — it is not a per-tick fork, and it cannot be
-    rewritten as one.
+  - **a watch is removed with `zle -F <fd>`, handler omitted.** `zle -F -<fd>`
+    is a parse error, not a negation, and `2>/dev/null` makes it look like
+    success. The descriptor then gets closed under a watch that is still
+    installed, and one dead descriptor in ZLE's select set starves *every* watch
+    in it — which is how this shipped a bug that left powerlevel10k's git
+    segment stuck on "loading" for the life of the shell. `tests/shell/
+    preview.py` asserts both that no grit watch survives a teardown and that a
+    neighbour's watch still fires afterwards.
+  - **the sleeper is one ticking subshell, but only by choice.** A handler
+    re-arming itself does work; one fork per line of typing simply beats one per
+    half second. Stopping is therefore grit's job, not the sleeper's.
   - **the handler must read its tick.** An unread descriptor stays readable and
     ZLE calls straight back, with no pause at all.
   - **`_grit_preview_release` owns both the descriptor and the armed flag.** The
