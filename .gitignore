@@ -3,3 +3,6 @@
 
 # The pty harness under tests/shell/ is run directly.
 __pycache__/
+
+# Agent scratch space: local settings, and worktrees that are whole checkouts.
+.claude/

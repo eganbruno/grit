@@ -278,10 +278,12 @@ def zsh_suite(grit, report):
 def zsh_neighbours_suite(grit, report, autosuggestions=None):
     """The preview shares a shell with other people's code.
 
-    It arms a `zsh/sched` timer rather than setting TMOUT, so it should leave a
-    user's auto-logout and their own TRAPALRM completely alone — and run no
-    timer at all on a line that is not the trigger. POSTDISPLAY, meanwhile, is a
-    single slot that zsh-autosuggestions also wants.
+    It watches a descriptor with `zle -F` rather than setting TMOUT, so it
+    should leave a user's auto-logout and their own TRAPALRM completely alone,
+    and watch nothing at all on a line that is not the trigger. ZLE's select
+    set is shared as well: one watch grit forgets to remove starves every other
+    watch in it. POSTDISPLAY, meanwhile, is a single slot that
+    zsh-autosuggestions also wants.
     """
     print("\nzsh — sharing the shell")
     if not have("zsh"):

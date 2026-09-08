@@ -8,7 +8,7 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 258 tests, ~17s
+cargo test                                   # 261 tests, under a minute
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
@@ -108,6 +108,13 @@ line you are typing. Four things hold it up, and each is easy to undo:
     half second. Stopping is therefore grit's job, not the sleeper's.
   - **the handler must read its tick.** An unread descriptor stays readable and
     ZLE calls straight back, with no pause at all.
+  - **the two `zle -N`s on the hook widgets are not redundant.**
+    `_grit_preview_on_redraw` and `_grit_preview_on_finish` are reached only
+    through `add-zle-hook-widget`, which makes registering them look like
+    ceremony. It is not: `add-zle-hook-widget` takes a widget, so a name that
+    is only a function is rejected and left out of the hook's list without a
+    word. That costs the whole idle preview, and `add-zle-hook-widget -L
+    line-pre-redraw` is the only thing that shows it.
   - **`_grit_preview_release` owns both the descriptor and the armed flag.** The
     two can disagree, TRAPINT can land in the window where they do, and an arm
     that overwrites a live descriptor number orphans its ticker for the life of

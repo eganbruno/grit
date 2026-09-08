@@ -143,10 +143,21 @@ different problem from printing it:
   the tests slice the text with the offsets to prove it.
 - The preview has to be instant, so it renders `cache.rs` and never opens a
   repository. The integration starts a throttled `grit shell refresh` behind it.
-- The idle timer is `zsh/sched`. `TMOUT` looks like the obvious answer and is
-  not: it can only be armed when a line read *begins*, so it cannot be turned on
-  when the buffer becomes the trigger, and merely defining a `TRAPALRM` to go
-  with it silently disables a user's auto-logout.
+- The idle timer is a descriptor watched with `zle -F`. Two more obvious
+  answers were tried first and both are wrong. `TMOUT` can only be armed when a
+  line read *begins*, so it cannot be switched on when the buffer becomes the
+  trigger, and merely defining a `TRAPALRM` to go with it silently disables a
+  user's auto-logout. `zsh/sched` can be armed and cancelled part-way through a
+  line, but it cannot express a delay under a second — `sched +0.5` is a parse
+  error — and the default delay is 0.5.
+- **A watch is removed with `zle -F <fd>`, handler omitted.** `zle -F -<fd>` is
+  a parse error rather than a negation, and `2>/dev/null` makes the failure look
+  like success. The descriptor is then closed underneath a watch that is still
+  installed, and one dead descriptor in ZLE's select set starves *every* watch
+  in it — which is how this once left powerlevel10k's git segment saying
+  "loading" for the life of the shell. `_grit_preview_release` owns both the
+  descriptor and the armed flag for that reason: everything that closes one goes
+  through that single function.
 
 If you change anything under `src/shell/`, run it against a real interactive
 shell rather than reading it and believing yourself:
@@ -182,6 +193,21 @@ Two exist: `vcs/git.rs` and `vcs/dolt.rs`. Say you want `jj`.
 
 Nothing in `commands/`, `render/` or `registry/` should need to change. If it
 does, the abstraction is in the wrong place — say so in the PR.
+
+Step 1 is not backward compatible, and that is worth handling before it bites
+someone. `VcsKind` is a closed enum, so a registry naming a backend the running
+grit has never heard of fails to deserialise — and because the whole file is
+parsed at once, one such entry takes the *entire* registry down with a raw
+`unknown variant` error rather than costing one row. Adding dolt did this to
+every grit 0.1.0 on a machine that also had a newer one; adding a third backend
+will do it again to 0.2.0. `src/cache.rs` serialises `VcsKind` too, so the
+status cache has the same property.
+
+The fix, whenever someone gets to it, is for an unrecognised kind to survive as
+one unusable row — preserving the original string, so saving the file back does
+not quietly rewrite an entry this build did not understand. That contradicts
+nothing else here: `RepoState::Missing` already exists precisely so one stale
+entry cannot take down the dashboard.
 
 ### What dolt taught us
 
@@ -234,8 +260,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-CI runs exactly these on Linux and macOS, plus a `cargo check` against the
-`rust-version` in `Cargo.toml`.
+CI runs the test job on Linux and macOS, `fmt` and `clippy` on Linux, and a
+`cargo check` against the `rust-version` in `Cargo.toml`. It also installs
+dolt, zsh and fish, because the tests that need those skip themselves rather
+than fail — so a green run with them missing would be quietly vacuous.
 
 ## Releasing
 

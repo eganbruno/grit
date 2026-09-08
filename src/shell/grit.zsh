@@ -287,6 +287,12 @@ _grit_preview_on_finish() {
 	_grit_preview_disarm
 	return 0
 }
+# Both of these `zle -N`s look redundant — the functions are only ever reached
+# through `add-zle-hook-widget` below — and removing either silently costs the
+# idle preview entirely. `add-zle-hook-widget` takes a *widget*, so an argument
+# that is merely a function is rejected and not added to the hook's list, with
+# nothing said about it. `add-zle-hook-widget -L line-pre-redraw` is what shows
+# you: an unregistered name is simply absent from the zstyle it prints.
 zle -N _grit_preview_on_finish
 
 # `zsh/zselect` is what the timer's sleeper counts with, and it ships with
