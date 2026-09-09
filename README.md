@@ -21,12 +21,22 @@
 --- 
 [![CI](https://github.com/eganbruno/grit/actions/workflows/ci.yml/badge.svg)](https://github.com/eganbruno/grit/actions/workflows/ci.yml)
 
-Work across many git and [dolt](https://github.com/dolthub/dolt) repositories
-from anywhere, by alias.
+Work across many git and [dolt](https://github.com/dolthub/dolt) repositories from anywhere.
 
-Preparing a release that spans four repos means four `cd`s to answer one
-question and four more to act on the answer. `grit` gives each repo a short
-name and lets you drive it from wherever you happen to be.
+[**Install**](#install) ·
+[**Quick start**](#quick-start) ·
+[**Commands**](#commands)
+
+Git only works on the directory you are in. That is completely fine until
+you have a few repositories: a service and the library it shares, a frontend
+and the API behind it, half a dozen side projects, the fork you keep meaning to
+rebase, and then the dance between repos every time you need to make changes
+across projects.
+
+`grit` lets you manage your repos from wherever you happen to be. Give each one
+a short name (and a tag, if it belongs with others) and you can check the
+status of all of them in one table, make changes in any one of them, or the
+same change across a whole group.
 
 <p align="left">
   <picture>
@@ -36,9 +46,10 @@ name and lets you drive it from wherever you happen to be.
   </picture>
 </p>
 
-At a glance: `api` has two unpushed commits plus three staged and one modified
-file, `docs` has an upstream commit waiting, `webapp` has uncommitted work, an
-untracked file and a stash, and `dashboard` is clean and up to date.
+That is one command, run from anywhere. At a glance: `api` has two unpushed
+commits plus three staged and one modified file, `docs` has an upstream commit
+waiting, `webapp` has uncommitted work, an untracked file and a stash, and
+`dashboard` is clean and up to date.
 
 ## Install
 
@@ -93,7 +104,7 @@ $ grit show
   4 repos · tags: backend, frontend, release · ~/.config/grit/config.toml
 ```
 
-Then, from anywhere:
+Then, also from anywhere:
 
 ```bash
 grit status                     # dashboard across every repo
@@ -105,77 +116,9 @@ grit api log --oneline -n 10      # any git command, flags and all
 grit @release fetch               # run it in every repo tagged `release`
 ```
 
-## The dashboard before you ask for it
-
-Type `grit`, pause, and the table appears under your cursor. Keep typing and it
-goes away.
-
-```
-$ grit
-  ALIAS      BRANCH               SYNC  STATE     COMMIT   SUBJECT                          AGE
-  ─────────────────────────────────────────────────────────────────────────────────────────────
-  api        feature/rate-limits  ↑2    ●3 ○1     15beeba  add rate limit headers           20m
-  dashboard  main                 ✓     clean     57a90bc  bump chart library to 4.2         2d
-
-  2 repos · 1 dirty · 1 ahead · 4s ago
-```
-
-You wanted to know the state of things *before* deciding what to type, which is
-the wrong way round from running a command to find out. Turn it on with:
-
-```bash
-grit shell enable
-```
-
-That adds a marked block to your shell's startup file and tells you which file
-it touched; `grit shell disable` takes exactly that block back out. It edits a
-startup file when you ask it to and at no other time — installing grit changes
-nothing on its own. `grit shell enable zsh` if `$SHELL` is not the shell you
-mean, and `--file` to write somewhere else.
-
-If you would rather add the line yourself, that is all the block contains:
-
-```bash
-eval "$(grit shell init zsh)"
-```
-
-It is the same table `grit status` prints, drawn from a cache so it costs
-nothing to show, with a note in the footer saying how old the reading is. A
-refresh runs behind it, and a reading old enough to mislead is not shown at all
-— you get the fresh one a moment later instead.
-
-Nothing runs unless the buffer is a trigger: the timer is armed when the buffer
-becomes `grit` and torn down the moment it stops being, so an ordinary line
-costs nothing at all. `TMOUT` and `TRAPALRM` are left alone, so an auto-logout
-you have configured keeps working.
-
-Set these *before* the `eval`, since the key is bound as the script is sourced:
-
-| Setting | What it does |
-| --- | --- |
-| `GRIT_PREVIEW_TRIGGERS` | array of buffers that summon it. Default `(grit)`. |
-| `GRIT_PREVIEW_DELAY` | seconds of stillness first; fractions allowed. Default `0.5`. |
-| `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G` in zsh, `\C-g` in bash, `\cg` in fish. Setting it empty binds nothing in zsh; bash and fish fall back to the default. |
-| `GRIT_PREVIEW_IDLE` | `0` for the key only, no timer. |
-
-**bash and fish** get `Ctrl-G` instead of the pause, because neither runs a hook
-while you sit at the prompt. `grit shell enable` handles them too, writing the
-right line for the shell into the right file:
-
-```bash
-grit shell enable bash            # ~/.bashrc
-grit shell enable fish            # ~/.config/fish/config.fish
-```
-
-The cached dashboard is a command in its own right, and cheap enough for a
-prompt or a tmux status line:
-
-```bash
-grit status --cached              # the last reading, in milliseconds
-```
-
-It exits non-zero and prints nothing when there is no reading to show, so a
-script can tell that apart from an empty registry.
+Type `grit` on its own and the table appears under your cursor without you
+running anything — see
+[the dashboard before you ask for it](#the-dashboard-before-you-ask-for-it).
 
 ## Commands
 
@@ -292,6 +235,78 @@ The last dashboard is cached under `~/.cache/grit/status.json` — or wherever
 `$GRIT_CACHE` points, or `$XDG_CACHE_HOME` moves it to. Deleting it costs one `grit status`. It is refused rather
 than trusted whenever the registry has changed since it was written, so a repo
 you have just removed can never appear in a preview.
+
+## The dashboard before you ask for it
+
+Type `grit` and the table appears under your cursor. Keep typing and it
+goes away.
+
+```
+$ grit
+  ALIAS      BRANCH               SYNC  STATE     COMMIT   SUBJECT                          AGE
+  ─────────────────────────────────────────────────────────────────────────────────────────────
+  api        feature/rate-limits  ↑2    ●3 ○1     15beeba  add rate limit headers           20m
+  dashboard  main                 ✓     clean     57a90bc  bump chart library to 4.2         2d
+
+  2 repos · 1 dirty · 1 ahead · 4s ago
+```
+
+Checking is the thing you skip when it costs a command of its own, which is how
+you end up committing on the wrong branch. This costs a pause. Turn it on with:
+
+```bash
+grit shell enable
+```
+
+That adds a marked block to your shell's startup file and tells you which file
+it touched; `grit shell disable` takes exactly that block back out. It edits a
+startup file when you ask it to and at no other time — installing grit changes
+nothing on its own. `grit shell enable zsh` if `$SHELL` is not the shell you
+mean, and `--file` to write somewhere else.
+
+If you would rather add the line yourself, that is all the block contains:
+
+```bash
+eval "$(grit shell init zsh)"
+```
+
+It is the same table `grit status` prints, drawn from a cache so it costs
+nothing to show, with a note in the footer saying how old the reading is. A
+refresh runs behind it, and a reading old enough to mislead is not shown at all
+— you get the fresh one a moment later instead.
+
+Nothing runs unless the buffer is a trigger: the timer is armed when the buffer
+becomes `grit` and torn down the moment it stops being, so an ordinary line
+costs nothing at all. `TMOUT` and `TRAPALRM` are left alone, so an auto-logout
+you have configured keeps working.
+
+Set these *before* the `eval`, since the key is bound as the script is sourced:
+
+| Setting | What it does |
+| --- | --- |
+| `GRIT_PREVIEW_TRIGGERS` | array of buffers that summon it. Default `(grit)`. |
+| `GRIT_PREVIEW_DELAY` | seconds of stillness first; fractions allowed. Default `0.5`. |
+| `GRIT_PREVIEW_KEY` | key that draws it on demand. Default `^G` in zsh, `\C-g` in bash, `\cg` in fish. Setting it empty binds nothing in zsh; bash and fish fall back to the default. |
+| `GRIT_PREVIEW_IDLE` | `0` for the key only, no timer. |
+
+**bash and fish** get `Ctrl-G` instead of the pause, because neither runs a hook
+while you sit at the prompt. `grit shell enable` handles them too, writing the
+right line for the shell into the right file:
+
+```bash
+grit shell enable bash            # ~/.bashrc
+grit shell enable fish            # ~/.config/fish/config.fish
+```
+
+The cached dashboard is a command in its own right, and cheap enough for a
+prompt or a tmux status line:
+
+```bash
+grit status --cached              # the last reading, in milliseconds
+```
+
+It exits non-zero and prints nothing when there is no reading to show, so a
+script can tell that apart from an empty registry.
 
 ## How it works
 
