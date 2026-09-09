@@ -8,7 +8,7 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 282 tests, under a minute
+cargo test                                   # 285 tests, under a minute
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
@@ -53,6 +53,17 @@ same for the status cache.
 - **Passthrough inherits stdio.** Capturing it would break the caller's pager
   (`delta`, `less`), colour detection and `$EDITOR`. `vcs/git.rs::exec` is
   explicit about this on purpose.
+  The corollary is that **the fan-out cannot know whether a child printed
+  anything**, which is why every repo in `run::fan_out` gets a receipt (`✓ ok`)
+  and not just the silent ones. The divider goes out before the child and so
+  promises output that `grit @tag add .` never produces; the receipt goes out
+  after, from the exit code, which grit holds either way. Three tempting
+  alternatives, all worse: a whitelist of "quiet commands" is wrong on the rows
+  that matter (a `git add` that warns, an alias, dolt differing from git); a
+  pipe buys detection at the cost of the pager, the colour and `$EDITOR`; and
+  writing a placeholder then `\r`-ing so the child overwrites it strands the
+  placeholder's tail on the end of any shorter first line, and garbles when
+  stdout is a file.
 - **`git status --porcelain=v2` is the only status format we parse.** v1 and
   the human-readable format are not stable enough to parse.
 - **An error's first line has to carry the cause.** `grit status` renders only

@@ -185,6 +185,67 @@ fn keep_going_visits_every_repo_and_still_fails() {
 }
 
 #[test]
+fn every_repo_gets_a_receipt_even_when_the_command_says_nothing() {
+    let env = TestEnv::new();
+    env.register("alpha", &env.repo("a"), &["grp"]);
+    env.register("bravo", &env.repo("b"), &["grp"]);
+
+    // `git add .` in a clean repo is the case the receipt exists for: it
+    // prints nothing at all, so the divider used to label a blank.
+    let out = env.grit().args(["@grp", "add", "."]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(stdout.contains("── alpha ─"), "{stdout}");
+    assert!(stdout.contains("── bravo ─"), "{stdout}");
+    assert_eq!(
+        stdout.matches("✓ ok").count(),
+        2,
+        "one receipt per repo:\n{stdout}"
+    );
+    // Nothing between a divider and its receipt: the whole point is that the
+    // gap is filled.
+    assert!(
+        stdout.contains("─\n  ✓ ok\n"),
+        "the receipt should sit straight under the divider:\n{stdout}"
+    );
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn a_receipt_closes_a_chatty_repo_rather_than_replacing_its_output() {
+    let env = TestEnv::new();
+    env.register("alpha", &env.repo("a"), &["grp"]);
+    env.register("bravo", &env.repo("b"), &["grp"]);
+
+    let out = env
+        .grit()
+        .args(["@grp", "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(stdout.contains("main\n  ✓ ok\n"), "{stdout}");
+}
+
+#[test]
+fn a_failing_repo_gets_a_receipt_naming_the_exit_code() {
+    let env = TestEnv::new();
+    env.register("alpha", &env.repo("a"), &["grp"]);
+    env.register("bravo", &env.repo("b"), &["grp"]);
+
+    let out = env
+        .grit()
+        .args(["-k", "@grp", "rev-parse", "--verify", "no-such-ref"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert_eq!(stdout.matches("✗ exit 128").count(), 2, "{stdout}");
+    assert!(stdout.contains("failed: alpha, bravo"), "{stdout}");
+    assert_eq!(out.status.code(), Some(128));
+}
+
+#[test]
 fn a_group_of_one_skips_the_divider() {
     let env = TestEnv::new();
     env.register("api", &env.repo("api"), &["release"]);

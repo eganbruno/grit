@@ -240,6 +240,31 @@ A group fan-out runs sequentially and stops at the first repo that fails. Pass
 grit -k @release fetch
 ```
 
+Each repo is introduced by a `── alias ──` divider and closed by a one-line
+receipt:
+
+```console
+$ grit @ingress add .
+── efdb ────────────────────────────────────────────────────────────────
+  ✓ ok
+
+── pipeline ────────────────────────────────────────────────────────────
+  ✓ ok
+
+── sources ─────────────────────────────────────────────────────────────
+  ✓ ok
+
+  3 repos · all ok
+```
+
+The receipt is there because the divider is printed *before* the command runs,
+so it promises output that `add`, `checkout` or an up-to-date `fetch` never
+produce — and grit cannot print it only in that case, because it cannot tell.
+Stdio is inherited, and reading the child's output to find out would cost you
+the pager and the colour that make the passthrough worth having. So it is
+printed always: one redundant line closing a chatty repo, and the whole answer
+for a silent one.
+
 ## Configuration
 
 `~/.config/grit/config.toml`, or wherever `$GRIT_CONFIG` points. It is plain

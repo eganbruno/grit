@@ -32,6 +32,15 @@ pub fn plural(n: usize, singular: &str, plural: &str) -> String {
     }
 }
 
+/// The one-line receipt printed under a repo's output during a fan-out, e.g.
+/// `  ✓ ok`.
+///
+/// Indented to sit under the divider rather than level with it, so it reads as
+/// belonging to the block above it.
+pub fn outcome(note: &str, style: Style, color: bool) -> String {
+    format!("  {}\n", paint(note, style, color))
+}
+
 /// A dim `── alias ─────` divider, used between repos during a group fan-out.
 pub fn divider(label: &str, width: Option<usize>, color: bool) -> String {
     use unicode_width::UnicodeWidthStr;
