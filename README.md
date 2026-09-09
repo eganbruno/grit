@@ -5,7 +5,7 @@
          in neither theme and the light `img` below wins under a dark theme. -->
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a.png">
-    <img alt="grit" src="assets/grit-logo-5a.png" width="320">
+    <img alt="grit" src="assets/grit-logo-5a.png" width="180">
   </picture>
 </p>
 
