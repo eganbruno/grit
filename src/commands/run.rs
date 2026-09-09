@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use crate::context::Ctx;
 use crate::error::Error;
 use crate::registry::Repo;
-use crate::render::{Theme, divider, footer, paint, plural};
+use crate::render::{Theme, divider, footer, outcome, paint, plural, symbol};
 use crate::vcs;
 
 pub fn run(argv: &[OsString], keep_going: bool, ctx: &mut Ctx) -> Result<i32> {
@@ -50,6 +50,19 @@ fn exec_one(repo: &Repo, args: &[OsString]) -> Result<i32> {
 /// Sequential on purpose. Interleaved output from four repos is unreadable, and
 /// a mutating command that half-applies in parallel is worse than one that
 /// stops at the first repo it could not handle.
+///
+/// Every repo gets a divider before it and a one-line receipt after it. The
+/// receipt is not decoration: the divider is printed *before* the child runs,
+/// so it promises output, and a command that says nothing — `add` with nothing
+/// to add, `checkout` already on the branch, `fetch` with nothing to fetch —
+/// leaves a headline over a blank that reads as though grit did nothing at all.
+///
+/// grit cannot print the receipt only in that case, because it cannot tell:
+/// stdio is inherited, and reading the child's output to find out would cost
+/// the caller their pager, their colour and their `$EDITOR`. So it is printed
+/// always. Under a chatty command it is one redundant line closing the block;
+/// under a silent one it is the entire answer. The exit code it reports is a
+/// fact grit already holds either way.
 fn fan_out(repos: &[Repo], args: &[OsString], keep_going: bool, ctx: &Ctx) -> Result<i32> {
     let mut first_failure = 0;
     let mut ran = 0;
@@ -69,6 +82,13 @@ fn fan_out(repos: &[Repo], args: &[OsString], keep_going: bool, ctx: &Ctx) -> Re
 
         let code = exec_one(repo, args)?;
         ran += 1;
+
+        let (note, style) = if code == 0 {
+            (format!("{} ok", symbol::SYNCED), Theme::ok())
+        } else {
+            (format!("{} exit {code}", symbol::FAILED), Theme::warn())
+        };
+        print!("{}", outcome(&note, style, ctx.color));
 
         if code != 0 {
             failed.push(repo.alias.clone());

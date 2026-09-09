@@ -41,6 +41,7 @@ fn no_color_env() -> bool {
 /// Symbols used in the status column. Single-width so columns stay aligned.
 pub mod symbol {
     pub const SYNCED: &str = "✓";
+    pub const FAILED: &str = "✗";
     pub const AHEAD: &str = "↑";
     pub const BEHIND: &str = "↓";
     pub const STAGED: &str = "●";
