@@ -229,7 +229,13 @@ _grit_preview_release() {
 	# its daemon, which is left saying "loading" for the life of the shell.
 	zle -F $_grit_preview_fd 2>/dev/null
 
-	exec {_grit_preview_fd}<&- 2>/dev/null
+	# The braces are the whole point. A redirection written on a bare `exec` is
+	# not scoped to it — `exec {fd}<&- 2>/dev/null` closes the descriptor *and*
+	# points the interactive shell's own stderr at /dev/null for the life of the
+	# shell, so every error message anything prints from then on is thrown away.
+	# It is silent, it survives the prompt, and it looks like the command did
+	# nothing. Redirecting the group instead leaves fd 2 alone.
+	{ exec {_grit_preview_fd}<&- } 2>/dev/null
 	_grit_preview_fd=0
 	return 0
 }
@@ -251,7 +257,7 @@ _grit_preview_fire() {
 	# It closes the ticker's descriptor on the way in. A child inheriting the
 	# read end is a reader, and while it lives the ticker's writes succeed — so a
 	# refresh outliving its disarm keeps a sleeper alive behind it.
-	( exec {_grit_preview_fd}<&- 2>/dev/null
+	( { exec {_grit_preview_fd}<&- } 2>/dev/null
 	  command grit shell refresh --max-age 30 & ) >/dev/null 2>&1
 
 	zle _grit_preview_show 2>/dev/null

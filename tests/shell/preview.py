@@ -378,6 +378,27 @@ def zsh_neighbours_suite(grit, report, autosuggestions=None):
                  f"{ticks(before)} -> {ticks(after)}")
     sh.close()
 
+
+    # A redirection on a bare `exec` belongs to the shell, not to the exec: one
+    # `exec {fd}<&- 2>/dev/null` closing the ticker took the interactive shell's
+    # stderr with it, permanently, and every error message anything printed
+    # afterwards went to /dev/null. It reads as commands doing nothing at all.
+    rc = fx.rc("stderr.zsh", f"PS1='%% '\neval \"$({fx.grit} shell init zsh)\"\n")
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+    sh.send("grit")
+    sh.read(1.4)                      # arm the timer and let it fire
+    sh.send("\x7f" * 4)
+    sh.read(1.0)                      # and tear it back down
+    # Split so the terminal's echo of what was typed does not itself contain
+    # the marker: the only way `STDERR-LIVES` reaches the screen whole is by
+    # being printed.
+    seen = sh.run('print -r -- "STDERR-""LIVES" >&2', 1.5)
+    report.check("the shell's own stderr survives an arm and a disarm",
+                 "STDERR-LIVES" in seen,
+                 seen.strip())
+    sh.close()
+
     if autosuggestions and os.path.exists(autosuggestions):
         rc = fx.rc("suggest.zsh",
                    f"PS1='%% '\nsource {autosuggestions}\n"

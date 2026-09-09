@@ -153,7 +153,10 @@ impl Registry {
             .collect();
 
         if matched.is_empty() {
-            return Err(Error::UnknownTag(tag.to_string()));
+            return Err(Error::UnknownTag {
+                tag: tag.to_string(),
+                known: self.tags(),
+            });
         }
         Ok(matched)
     }
@@ -338,10 +341,21 @@ mod tests {
 
     #[test]
     fn an_unknown_tag_is_an_error_not_an_empty_list() {
-        assert!(matches!(
-            fixture().by_tag("nope").unwrap_err(),
-            Error::UnknownTag(_)
-        ));
+        let err = fixture().by_tag("nope").unwrap_err();
+        assert!(matches!(err, Error::UnknownTag { .. }));
+        // The tags that do exist are named in the error, so the reader does not
+        // have to go and run `grit show` to find the one they meant.
+        let msg = err.to_string();
+        assert!(msg.starts_with("no repos tagged `nope`"), "{msg}");
+        assert!(msg.contains("tags in use: core, release"), "{msg}");
+    }
+
+    #[test]
+    fn an_unknown_tag_with_no_tags_at_all_says_how_to_make_one() {
+        let mut registry = Registry::empty_at("/tmp/grit-test.toml");
+        registry.insert("docs".to_string(), entry("/code/docs", &[]));
+        let msg = registry.by_tag("nope").unwrap_err().to_string();
+        assert!(msg.contains("no tags are in use"), "{msg}");
     }
 
     #[test]
