@@ -3,11 +3,15 @@
     <!-- Absolute URLs so the images resolve where a relative path cannot:
          crates.io, and anywhere else the README is rendered outside the
          repository. The cost is that they 404 until the assets are pushed.
-
-         `prefers-color-scheme` follows the reader's desktop, not their editor
-         theme, so a dark editor on a light desktop shows the light wordmark on
-         a dark page. That is the media query working; no markup can see an
-         editor's own theme. -->
+         .
+         prefers-color-scheme follows the reader's desktop, not their editor
+         theme, so a dark editor on a light desktop shows the light wordmark
+         on a dark page. That is the media query working; no markup can see an
+         editor's own theme.
+         .
+         No blank line anywhere in this comment: an HTML block ends at one,
+         which leaves the `<!--` unterminated and swallows the entire rest of
+         the README. GitHub renders 119 bytes and stops. -->
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a.png">
     <img alt="grit" src="assets/grit-logo-5a.png" width="180">
