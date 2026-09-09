@@ -1,4 +1,15 @@
-# grit
+<p align="left">
+  <picture>
+    <!-- Absolute URLs: VS Code's markdown preview rewrites a relative `src` into
+         its webview scheme but leaves `srcset` alone, so relative paths here load
+         in neither theme and the light `img` below wins under a dark theme. -->
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a.png">
+    <img alt="grit" src="assets/grit-logo-5a.png" width="320">
+  </picture>
+</p>
+
+--- 
 [![CI](https://github.com/eganbruno/grit/actions/workflows/ci.yml/badge.svg)](https://github.com/eganbruno/grit/actions/workflows/ci.yml)
 
 Work across many git and [dolt](https://github.com/dolthub/dolt) repositories
