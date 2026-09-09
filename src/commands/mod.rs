@@ -90,10 +90,10 @@ fn help_or_version(argv: &[OsString]) -> Result<Option<i32>> {
 
             // `grit help | head` closes the pipe on us, and that is the reader
             // being done rather than a failure to report.
-            if let Err(e) = cmd.print_long_help()
-                && e.kind() != std::io::ErrorKind::BrokenPipe
-            {
-                return Err(e.into());
+            if let Err(e) = cmd.print_long_help() {
+                if e.kind() != std::io::ErrorKind::BrokenPipe {
+                    return Err(e.into());
+                }
             }
             Ok(Some(0))
         }
