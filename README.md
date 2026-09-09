@@ -1,4 +1,5 @@
 # grit
+[![CI](https://github.com/eganbruno/grit/actions/workflows/ci.yml/badge.svg)](https://github.com/eganbruno/grit/actions/workflows/ci.yml)
 
 Work across many git and [dolt](https://github.com/dolthub/dolt) repositories
 from anywhere, by alias.
