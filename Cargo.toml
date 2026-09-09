@@ -1,6 +1,6 @@
 [package]
 name = "grit"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # 1.85 is the edition-2024 floor, but `etcetera` requires 1.87. The `msrv` CI
 # job is what proves this number; do not raise it by hand without checking
