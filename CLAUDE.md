@@ -125,6 +125,12 @@ line you are typing. Four things hold it up, and each is easy to undo:
     is only a function is rejected and left out of the hook's list without a
     word. That costs the whole idle preview, and `add-zle-hook-widget -L
     line-pre-redraw` is the only thing that shows it.
+  - **a redirection on a bare `exec` belongs to the shell.** `exec {fd}<&-
+    2>/dev/null` closes the descriptor and points the *interactive shell's*
+    stderr at /dev/null for the life of the shell, so every error message
+    anything prints afterwards is discarded — `grit @nosuchtag branch` reads as
+    doing nothing at all. Wrap it: `{ exec {fd}<&- } 2>/dev/null`.
+    `tests/shell/preview.py` prints to stderr after an arm and a disarm.
   - **`_grit_preview_release` owns both the descriptor and the armed flag.** The
     two can disagree, TRAPINT can land in the window where they do, and an arm
     that overwrites a live descriptor number orphans its ticker for the life of
