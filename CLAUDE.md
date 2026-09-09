@@ -8,7 +8,7 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 261 tests, under a minute
+cargo test                                   # 282 tests, under a minute
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
@@ -173,6 +173,26 @@ box-drawing. Before changing the table:
   another copy of the alignment code.
 - colour must be off when stdout is not a terminal or `NO_COLOR` is set; the
   integration tests assert this.
+- **the README's dashboard is generated, not drawn.** GitHub cannot colour a
+  fenced block, so the headline example is an SVG — and an SVG is a second copy
+  of the palette. `tests/readme_svg.rs` renders it through the real
+  `build_table` and the real `Theme`, and asserts the committed
+  `assets/status-*.svg` match a fresh render, so repainting `Theme` fails
+  `cargo test` rather than quietly making the README lie. The fix it asks for:
+
+  ```bash
+  cargo test --test readme_svg -- --ignored
+  ```
+
+  Two things there are easy to get wrong. `render::svg` is a third *renderer*
+  but not a third *layout* — it consumes `render_highlighted`'s text-plus-ranges
+  like the shell preview does, and reaching for `Table::lines` again would be
+  the copy the table module warns about. And the palette is not a transcription
+  of xterm: the numbered greys (`8`, `238`) are resolved per medium, because
+  the terminal's 238 against a web page is a rule nobody can see. Named hues
+  come from `zsh_style`'s table via `theme::ink`, so there is still exactly one
+  list of what grit's colours mean.
+
 - **no cell may hold a control character.** `Cell` flattens newlines and tabs to
   spaces on the way in, because cells are filled from strings read out of
   repositories and a renderer that comes apart on its input is the wrong place

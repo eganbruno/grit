@@ -3,9 +3,11 @@
 //! Commands build [`table::Table`]s and hand them a [`crate::context::Ctx`]'s
 //! colour and width settings; nothing in here knows about the registry or git.
 
+pub mod svg;
 pub mod table;
 pub mod theme;
 
+pub use svg::{Palette, Screen};
 pub use table::{Align, Cell, Highlight, Table, paint};
 pub use theme::{ColorChoice, Theme, symbol, zsh_style};
 

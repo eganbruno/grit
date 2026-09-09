@@ -20,7 +20,7 @@ use crate::render::{Align, Cell, Table, Theme, footer, plural, symbol};
 use crate::vcs::{self, RepoState, Snapshot};
 
 /// One repo's reading, or why it could not be read.
-pub(crate) struct Row {
+pub struct Row {
     pub repo: Repo,
     pub outcome: Result<Snapshot, String>,
 }
@@ -182,7 +182,7 @@ fn first_line(s: &str) -> String {
 ///
 /// Shared with `grit shell preview`, which renders the same geometry into text
 /// plus highlight ranges rather than into ANSI. Two renderers, one layout.
-pub(crate) fn build_table(rows: &[Row], ctx: &Ctx) -> Table {
+pub fn build_table(rows: &[Row], ctx: &Ctx) -> Table {
     let mut table = Table::new([
         "alias", "branch", "sync", "state", "commit", "subject", "age",
     ])
@@ -331,7 +331,7 @@ fn state_cell(snap: &Snapshot) -> Cell {
 
 /// The bullet-separated line under the table. Only non-zero facts appear, so a
 /// quiet day reads `4 repos · all clean`.
-pub(crate) fn summarise(rows: &[Row]) -> Vec<String> {
+pub fn summarise(rows: &[Row]) -> Vec<String> {
     let snaps: Vec<&Snapshot> = rows
         .iter()
         .filter_map(|r| r.outcome.as_ref().ok())
