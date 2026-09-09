@@ -13,8 +13,8 @@ pub enum Error {
     #[error("no repo registered under alias `{0}`\nrun `grit show` to see what is registered")]
     UnknownAlias(String),
 
-    #[error("no repos tagged `{0}`\nrun `grit show` to see the available tags")]
-    UnknownTag(String),
+    #[error("no repos tagged `{tag}`\n{}", tag_hint(known))]
+    UnknownTag { tag: String, known: Vec<String> },
 
     #[error("`{0}` is a grit command, so it can't be used as an alias")]
     ReservedAlias(String),
@@ -107,5 +107,18 @@ impl Error {
             path,
             source,
         }
+    }
+}
+
+/// The second line of [`Error::UnknownTag`]: the tags that *do* exist.
+///
+/// The cause stays on the first line — `grit status` renders only that one —
+/// so this is a hint below it, and it names the tags rather than sending the
+/// reader off to `grit show` for a list grit already has in hand.
+fn tag_hint(known: &[String]) -> String {
+    if known.is_empty() {
+        "no tags are in use; add one with `grit -r <alias> <path> --tag <name>`".to_string()
+    } else {
+        format!("tags in use: {}", known.join(", "))
     }
 }
