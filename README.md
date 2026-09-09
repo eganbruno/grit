@@ -1,8 +1,13 @@
 <p align="left">
   <picture>
-    <!-- Absolute URLs: VS Code's markdown preview rewrites a relative `src` into
-         its webview scheme but leaves `srcset` alone, so relative paths here load
-         in neither theme and the light `img` below wins under a dark theme. -->
+    <!-- Absolute URLs so the images resolve where a relative path cannot:
+         crates.io, and anywhere else the README is rendered outside the
+         repository. The cost is that they 404 until the assets are pushed.
+
+         `prefers-color-scheme` follows the reader's desktop, not their editor
+         theme, so a dark editor on a light desktop shows the light wordmark on
+         a dark page. That is the media query working; no markup can see an
+         editor's own theme. -->
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/grit-logo-5a.png">
     <img alt="grit" src="assets/grit-logo-5a.png" width="180">
@@ -19,17 +24,13 @@ Preparing a release that spans four repos means four `cd`s to answer one
 question and four more to act on the answer. `grit` gives each repo a short
 name and lets you drive it from wherever you happen to be.
 
-```
-$ grit status
-  ALIAS      BRANCH               SYNC  STATE     COMMIT   SUBJECT                          AGE
-  ─────────────────────────────────────────────────────────────────────────────────────────────
-  api        feature/rate-limits  ↑2    ●3 ○1     15beeba  add rate limit headers           20m
-  dashboard  main                 ✓     clean     57a90bc  bump chart library to 4.2         2d
-  docs       main                 ↓1    clean     430125f  document the webhooks endpoint    3d
-  webapp     fix/login-redirect   ✓     ○2 ?1 ⚑1  a36d467  restore scroll position on back   6h
-
-  4 repos · 2 dirty · 1 ahead · 1 behind · 1 stash
-```
+<p align="left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/status-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/status-light.svg">
+    <img alt="grit status: four repos, one showing two commits ahead with staged and modified files, two clean, one with uncommitted work and a stash" src="assets/status-light.svg" width="830">
+  </picture>
+</p>
 
 At a glance: `api` has two unpushed commits plus three staged and one modified
 file, `docs` has an upstream commit waiting, `webapp` has uncommitted work, an

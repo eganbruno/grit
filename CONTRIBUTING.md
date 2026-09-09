@@ -37,6 +37,7 @@ src/
 tests/
   common/mod.rs   TestEnv — a temp registry and throwaway git repos
   cli_*.rs        one file per command, plus one per VCS backend
+  readme_svg.rs   renders the README's dashboard, and guards it against drift
   shell/          a pty harness for the integrations; run by hand
 ```
 
@@ -48,6 +49,25 @@ Two rules keep this honest:
 - **Parsers are pure functions.** `vcs/git.rs` separates "run the command" from
   "parse its output" so the parsing — where the bugs are — is tested against
   fixture strings, with no repository on disk.
+
+## The README's dashboard
+
+The example at the top of the README is an image, because GitHub gives no way
+to colour text inside a fenced block — and colour is half of what that example
+is showing. It is *generated* rather than drawn, from the same `build_table`
+the terminal uses and the same `Theme` it paints with, so it cannot come to
+disagree with the tool it advertises.
+
+If you repaint `Theme`, or change what the status table shows, `cargo test`
+fails with a stale-asset message. Regenerate and commit the result:
+
+```bash
+cargo test --test readme_svg -- --ignored
+```
+
+The rows are invented — fixed SHAs and ages — because the point is a
+representative dashboard and real repos would mean random hashes and ages that
+grow by the day. Everything about how they are *rendered* is real.
 
 ## Adding a command
 

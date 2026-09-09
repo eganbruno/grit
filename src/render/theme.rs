@@ -170,9 +170,97 @@ static ZSH_STYLES: &[ZshStyle] = &[
     (Theme::banner, "fg=cyan,bold"),
 ];
 
+/// A style reduced to a colour slot and a weight.
+///
+/// For renderers that paint but cannot speak ANSI — currently the SVG the
+/// README shows. Deliberately derived from [`ZSH_STYLES`] by parsing the
+/// spelling already recorded there, rather than by listing every style a
+/// second time: a palette kept in two places is a palette that disagrees with
+/// itself, and this file exists so the answer is in one place.
+///
+/// `color` is the zsh colour token — a name (`green`) or an xterm number
+/// (`8`, `238`) — left for the caller to resolve, because what a colour *is*
+/// depends on the medium. A style with no entry comes back fully default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Ink {
+    pub color: Option<&'static str>,
+    pub bold: bool,
+}
+
+/// Reduce a [`Theme`] style to an [`Ink`].
+pub fn ink(style: Style) -> Ink {
+    let Some(spec) = zsh_style(style) else {
+        return Ink::default();
+    };
+
+    let mut ink = Ink::default();
+    for part in spec.split(',') {
+        match part {
+            "bold" => ink.bold = true,
+            _ => ink.color = part.strip_prefix("fg=").or(ink.color),
+        }
+    }
+    ink
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ink_reads_colour_and_weight_off_one_spec() {
+        assert_eq!(ink(Theme::branch()).color, Some("cyan"));
+        assert!(!ink(Theme::branch()).bold);
+
+        let conflict = ink(Theme::conflict());
+        assert_eq!(conflict.color, Some("red"));
+        assert!(conflict.bold);
+
+        assert_eq!(
+            ink(Theme::alias()),
+            Ink {
+                color: None,
+                bold: true
+            }
+        );
+        assert_eq!(ink(Theme::muted()).color, Some("8"));
+    }
+
+    #[test]
+    fn an_unstyled_style_asks_for_no_ink() {
+        assert_eq!(ink(Theme::subject()), Ink::default());
+    }
+
+    #[test]
+    fn every_style_the_dashboard_uses_resolves_to_ink() {
+        // The styles the status table can produce. A repaint that `zsh_style`
+        // has not been told about loses its colour silently in both the shell
+        // preview and the SVG; this is the tripwire.
+        for named in [
+            Theme::alias as fn() -> Style,
+            Theme::branch,
+            Theme::detached,
+            Theme::sha,
+            Theme::muted,
+            Theme::ok,
+            Theme::ahead,
+            Theme::behind,
+            Theme::staged,
+            Theme::unstaged,
+            Theme::untracked,
+            Theme::conflict,
+            Theme::stash,
+            Theme::warn,
+            Theme::rule,
+            Theme::header,
+        ] {
+            let ink = ink(named());
+            assert!(
+                ink != Ink::default(),
+                "a dashboard style resolved to no ink at all"
+            );
+        }
+    }
 
     #[test]
     fn always_and_never_ignore_the_terminal() {
