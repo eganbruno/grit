@@ -19,6 +19,8 @@ use anyhow::{Context as _, Result};
 use crate::cli::DetailArgs;
 use crate::context::Ctx;
 use crate::registry::{Repo, abbreviate_home};
+use owo_colors::Style;
+
 use crate::render::{Align, Cell, Table, Theme, footer, paint, plural, symbol};
 use crate::vcs::{self, Branch, Change, Detail, FileChange, RepoState, Snapshot};
 
@@ -29,91 +31,168 @@ pub fn run(args: &DetailArgs, ctx: &mut Ctx) -> Result<i32> {
         .detail(repo.path())
         .with_context(|| format!("could not read `{}`", repo.alias))?;
 
-    if args.json {
-        println!("{}", super::to_json(&DetailJson::new(&repo, &detail))?);
+    let out = if args.json {
+        format!("{}\n", super::to_json(&DetailJson::new(&repo, &detail))?)
     } else {
-        print_card(&repo, &detail, ctx);
-    }
+        card(&repo, &detail, ctx)
+    };
 
+    write_out(&out)?;
     Ok(0)
 }
 
-fn print_card(repo: &Repo, detail: &Detail, ctx: &Ctx) {
-    print_header(repo, detail, ctx);
+/// Write the whole card in one go, and treat a closed pipe as the reader being
+/// finished rather than as a failure.
+///
+/// A card is several sections tall and `grit detail api | head` is an obvious
+/// thing to type. Built as one string and written once, because a run of
+/// `println!`s hits the closed pipe partway through and Rust's default for
+/// that is a panic — `commands::dispatch` already takes this view of
+/// `grit help | head`.
+fn write_out(text: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    match std::io::stdout().write_all(text.as_bytes()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => Ok(other?),
+    }
+}
+
+/// One piece of the card, before anyone decides how to paint it.
+///
+/// The card is a stack of short tables under their own titles, with a few
+/// lines of loose spans among them, so it does not fit `Table` alone. Blocks
+/// are what both consumers walk: [`card`] paints them for a terminal, and
+/// `tests/readme_svg.rs` lays the same ones into the SVG the README shows.
+/// The arrangement `status::build_table` has with the shell preview, for the
+/// same reason — one layout, two renderers.
+pub enum Block {
+    /// A line of styled spans, at the table margin.
+    Line(Cell),
+    Blank,
+    /// A titled section. Absent entirely when it has no rows.
+    Section(&'static str, Table),
+}
+
+/// The card as blocks.
+pub fn build_card(repo: &Repo, detail: &Detail, ctx: &Ctx) -> Vec<Block> {
+    let mut blocks = vec![
+        Block::Blank,
+        Block::Line(
+            Cell::styled(&repo.alias, Theme::alias())
+                .push("  ", Style::new())
+                .push(abbreviate_home(repo.path()), Theme::path()),
+        ),
+        Block::Line(about_cell(repo)),
+        Block::Blank,
+        Block::Line(header_cell(&detail.snapshot)),
+    ];
 
     if detail.snapshot.state == RepoState::Missing {
         // Nothing below the header would say anything: there is no working
         // tree to have changes in. The header already says `missing`.
-        return;
+        return blocks;
     }
 
-    section("changes", changes_table(&detail.files, ctx), ctx);
-    section("commits", commits_table(detail, ctx), ctx);
-    section("branches", branches_table(&detail.branches, ctx), ctx);
-    section("stashes", stashes_table(detail, ctx), ctx);
+    for (title, table) in [
+        ("changes", changes_table(&detail.files, ctx)),
+        ("commits", commits_table(detail, ctx)),
+        ("branches", branches_table(detail.branches.as_slice(), ctx)),
+        ("stashes", stashes_table(detail, ctx)),
+    ] {
+        if let Some(table) = table {
+            blocks.push(Block::Blank);
+            blocks.push(Block::Section(title, table));
+        }
+    }
 
     let parts = summarise(detail);
     if !parts.is_empty() {
-        println!();
-        print!("{}", footer(&parts, ctx.color));
+        blocks.push(Block::Blank);
+        blocks.push(Block::Line(Cell::styled(
+            footer(&parts, false).trim().to_string(),
+            Theme::muted(),
+        )));
     }
+
+    blocks
 }
 
-/// The alias, where it lives, and what the dashboard would have said about it.
-fn print_header(repo: &Repo, detail: &Detail, ctx: &Ctx) {
-    let snap = &detail.snapshot;
+/// The blocks, painted.
+fn card(repo: &Repo, detail: &Detail, ctx: &Ctx) -> String {
+    let mut out = String::new();
 
-    println!();
-    println!(
-        "  {}  {}",
-        paint(&repo.alias, Theme::alias(), ctx.color),
-        paint(&abbreviate_home(repo.path()), Theme::path(), ctx.color),
-    );
-
-    // The backend and the tags are registry facts rather than readings, and
-    // they belong with the path rather than with the branch line below.
-    let mut about = vec![paint(repo.kind().as_str(), Theme::kind(), ctx.color)];
-    if !repo.entry.tags.is_empty() {
-        about.push(paint(&repo.entry.tags.join(", "), Theme::tag(), ctx.color));
+    for block in build_card(repo, detail, ctx) {
+        match block {
+            Block::Blank => out.push('\n'),
+            Block::Line(cell) => {
+                out.push_str(MARGIN);
+                out.push_str(&render_cell(&cell, ctx));
+                out.push('\n');
+            }
+            Block::Section(title, table) => {
+                out.push_str(MARGIN);
+                out.push_str(&paint(&title.to_uppercase(), Theme::header(), ctx.color));
+                out.push('\n');
+                out.push_str(&table.render());
+            }
+        }
     }
-    println!(
-        "  {}",
-        about.join(&format!(
-            " {} ",
-            paint(symbol::BULLET, Theme::muted(), ctx.color)
-        )),
-    );
 
-    println!();
-    println!("  {}", header_line(snap, ctx));
+    out
+}
+
+/// The margin a [`Table`] indents by, for the lines that are not tables.
+const MARGIN: &str = "  ";
+
+/// The backend and the tags: registry facts rather than readings, which is
+/// why they sit with the path rather than with the branch line below.
+fn about_cell(repo: &Repo) -> Cell {
+    let cell = Cell::styled(repo.kind().as_str(), Theme::kind());
+    if repo.entry.tags.is_empty() {
+        return cell;
+    }
+    cell.push(format!(" {} ", symbol::BULLET), Theme::muted())
+        .push(repo.entry.tags.join(", "), Theme::tag())
 }
 
 /// `main → origin/main   ↑2 ↓1   ●3 ○1 ?2`, or `missing`.
 ///
-/// Built as a [`Cell`] and rendered by hand rather than through a table: it is
-/// one line of differently-coloured pieces, which is exactly what a cell is,
-/// and there are no columns to align it against.
-fn header_line(snap: &Snapshot, ctx: &Ctx) -> String {
+/// A [`Cell`] rather than a painted string: it is one line of
+/// differently-coloured pieces, which is exactly what a cell is, and being one
+/// is what lets the SVG lay it out without a second copy of the colours.
+fn header_cell(snap: &Snapshot) -> Cell {
     if snap.state == RepoState::Missing {
-        return paint("missing", Theme::warn(), ctx.color);
+        return Cell::styled("missing", Theme::warn());
     }
 
-    let mut parts = vec![match &snap.branch {
-        Some(branch) => paint(branch, Theme::branch(), ctx.color),
-        None => paint("detached", Theme::detached(), ctx.color),
-    }];
+    let mut cell = match &snap.branch {
+        Some(branch) => Cell::styled(branch, Theme::branch()),
+        None => Cell::styled("detached", Theme::detached()),
+    };
 
     if let Some(upstream) = &snap.upstream {
-        parts.push(paint("→", Theme::muted(), ctx.color));
-        parts.push(paint(upstream, Theme::muted(), ctx.color));
+        cell = cell
+            .push("  ", Style::new())
+            .push("→", Theme::muted())
+            .push("  ", Style::new())
+            .push(upstream, Theme::muted());
     }
 
-    let sync = super::status::sync_cell(snap);
-    let state = super::status::state_cell(snap);
-    parts.push(render_cell(&sync, ctx));
-    parts.push(render_cell(&state, ctx));
+    for part in [
+        super::status::sync_cell(snap),
+        super::status::state_cell(snap),
+    ] {
+        if part.is_empty() {
+            continue;
+        }
+        cell = cell.push("  ", Style::new());
+        for span in part.spans() {
+            cell = cell.push(span.text.clone(), span.style);
+        }
+    }
 
-    parts.join("  ")
+    cell
 }
 
 /// A cell's spans, painted, with nothing padded around them.
@@ -122,20 +201,6 @@ fn render_cell(cell: &Cell, ctx: &Ctx) -> String {
         .iter()
         .map(|span| paint(&span.text, span.style, ctx.color))
         .collect()
-}
-
-/// A titled section, printed only when its table has rows in it.
-fn section(title: &str, table: Option<Table>, ctx: &Ctx) {
-    let Some(table) = table else {
-        return;
-    };
-
-    println!();
-    println!(
-        "  {}",
-        paint(&title.to_uppercase(), Theme::header(), ctx.color)
-    );
-    print!("{}", table.render());
 }
 
 /// Every section's table is built the same way: same colour, same width, and
@@ -213,6 +278,9 @@ fn commits_table(detail: &Detail, ctx: &Ctx) -> Option<Table> {
     Some(table)
 }
 
+/// The branch list, in the same columns and the same colours `grit branch`
+/// gives it — and through the very same `sync_cell`, so the two cannot come
+/// to disagree about what `gone`, or a distance nobody measured, looks like.
 fn branches_table(branches: &[Branch], ctx: &Ctx) -> Option<Table> {
     if branches.is_empty() {
         return None;
@@ -224,58 +292,27 @@ fn branches_table(branches: &[Branch], ctx: &Ctx) -> Option<Table> {
 
     for branch in branches {
         table.push_row(vec![
-            match branch.head {
+            match branch.is_head {
                 true => Cell::styled("*", Theme::ok()),
                 false => Cell::empty(),
             },
             Cell::styled(&branch.name, Theme::branch()),
-            match &branch.upstream {
+            match branch.tracking.upstream() {
                 Some(upstream) => Cell::styled(upstream, Theme::muted()),
                 None => Cell::styled(symbol::NONE, Theme::muted()),
             },
-            branch_sync_cell(branch),
-            match &branch.tip {
+            super::branch::sync_cell(&branch.tracking),
+            match &branch.head {
                 Some(tip) => Cell::styled(&tip.subject, Theme::subject()),
                 None => Cell::styled("no commits yet", Theme::muted()),
             },
-            match &branch.tip {
+            match &branch.head {
                 Some(tip) => Cell::styled(&tip.age, Theme::muted()),
                 None => Cell::empty(),
             },
         ]);
     }
     Some(table)
-}
-
-/// The same cases the dashboard's sync column distinguishes, for one branch
-/// rather than for the checked-out one.
-///
-/// A branch with no measured distance gets nothing at all — not a `✓`. Its
-/// upstream may have been deleted, or the backend may not have been able to
-/// run the count; either way nothing has been compared, and a tick would say
-/// the opposite.
-fn branch_sync_cell(branch: &Branch) -> Cell {
-    let Some(distance) = branch.distance else {
-        return Cell::empty();
-    };
-    if distance.is_level() {
-        return Cell::styled(symbol::SYNCED, Theme::ok());
-    }
-
-    let mut cell = Cell::empty();
-    if distance.ahead > 0 {
-        cell = cell.push(
-            format!("{}{}", symbol::AHEAD, distance.ahead),
-            Theme::ahead(),
-        );
-    }
-    if distance.behind > 0 {
-        cell = cell.push_spaced(
-            format!("{}{}", symbol::BEHIND, distance.behind),
-            Theme::behind(),
-        );
-    }
-    cell
 }
 
 fn stashes_table(detail: &Detail, ctx: &Ctx) -> Option<Table> {
@@ -305,8 +342,9 @@ pub fn summarise(detail: &Detail) -> Vec<String> {
     if !detail.files.is_empty() {
         parts.push(plural(detail.files.len(), "change", "changes"));
     }
-    if !detail.branches.is_empty() {
-        parts.push(plural(detail.branches.len(), "branch", "branches"));
+    let branches = detail.branches.as_slice();
+    if !branches.is_empty() {
+        parts.push(plural(branches.len(), "branch", "branches"));
     }
     if !detail.stashes.is_empty() {
         parts.push(plural(detail.stashes.len(), "stash", "stashes"));
@@ -314,24 +352,42 @@ pub fn summarise(detail: &Detail) -> Vec<String> {
     parts
 }
 
+/// The card as one JSON object.
+///
+/// `branches` and `missing` are spelled the way `grit branch --json` spells
+/// them rather than as the [`Branches`] enum serde would write by itself: two
+/// commands answering about the same branches should answer in the same shape.
 #[derive(serde::Serialize)]
 struct DetailJson<'a> {
     alias: &'a str,
     path: &'a std::path::Path,
     kind: crate::registry::VcsKind,
     tags: &'a [String],
-    #[serde(flatten)]
-    detail: &'a Detail,
+    snapshot: &'a Snapshot,
+    files: &'a [FileChange],
+    commits: &'a [crate::vcs::Commit],
+    stashes: &'a [crate::vcs::Stash],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branches: Option<&'a [Branch]>,
+    /// Only present, and only true, when the registered path is gone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    missing: bool,
 }
 
 impl<'a> DetailJson<'a> {
     fn new(repo: &'a Repo, detail: &'a Detail) -> Self {
+        let missing = matches!(detail.branches, crate::vcs::Branches::Missing);
         Self {
             alias: &repo.alias,
             path: repo.path(),
             kind: repo.kind(),
             tags: &repo.entry.tags,
-            detail,
+            snapshot: &detail.snapshot,
+            files: &detail.files,
+            commits: &detail.commits,
+            stashes: &detail.stashes,
+            branches: (!missing).then(|| detail.branches.as_slice()),
+            missing,
         }
     }
 }
@@ -339,7 +395,7 @@ impl<'a> DetailJson<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vcs::{Commit, Distance, Stash};
+    use crate::vcs::Stash;
 
     fn file(path: &str, staged: Option<Change>, unstaged: Option<Change>) -> FileChange {
         FileChange {
@@ -401,54 +457,6 @@ mod tests {
         ] {
             assert_eq!(code_cell(&file("x", staged, unstaged)).width(), 2);
         }
-    }
-
-    fn branch(name: &str, upstream: Option<&str>, ahead: u32, behind: u32) -> Branch {
-        Branch {
-            name: name.to_string(),
-            upstream: upstream.map(str::to_string),
-            distance: upstream.map(|_| Distance { ahead, behind }),
-            head: false,
-            tip: Some(Commit {
-                short_id: "abc1234".into(),
-                subject: "do a thing".into(),
-                age: "3h".into(),
-            }),
-        }
-    }
-
-    #[test]
-    fn a_branch_level_with_its_upstream_gets_a_tick() {
-        assert_eq!(
-            branch_sync_cell(&branch("main", Some("origin/main"), 0, 0)).text(),
-            symbol::SYNCED
-        );
-    }
-
-    #[test]
-    fn a_branch_with_no_upstream_gets_no_sync_marker_at_all() {
-        // Not a tick: nothing has been compared, which is a different fact
-        // from having compared and found no difference.
-        assert!(branch_sync_cell(&branch("wip", None, 0, 0)).is_empty());
-    }
-
-    #[test]
-    fn a_branch_whose_distance_was_never_measured_gets_no_tick_either() {
-        // An upstream that has been deleted, or a backend that could not run
-        // the count. `git for-each-ref` still names the upstream in that first
-        // case, so reading the missing distance as zero is exactly how a ✓
-        // ends up against a branch tracking something that is gone.
-        let mut unmeasured = branch("stale", Some("origin/stale"), 0, 0);
-        unmeasured.distance = None;
-        assert!(branch_sync_cell(&unmeasured).is_empty());
-    }
-
-    #[test]
-    fn a_diverged_branch_counts_both_ways() {
-        assert_eq!(
-            branch_sync_cell(&branch("main", Some("origin/main"), 2, 5)).text(),
-            "↑2 ↓5"
-        );
     }
 
     #[test]

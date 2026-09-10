@@ -64,6 +64,18 @@ same for the status cache.
   writing a placeholder then `\r`-ing so the child overwrites it strands the
   placeholder's tail on the end of any shorter first line, and garbles when
   stdout is a file.
+- **A listing grit renders itself beats the same listing passed through.**
+  `grit branch` exists because `grit @tag branch -vv` cannot be fixed: the
+  child writes to the terminal on inherited stdio, so grit never sees the text,
+  and both git and dolt print a commit *message* where a table wants a subject.
+  One merge commit with a rationale in its body turns a fifteen-branch listing
+  into pages. Piping the child to trim it is wrong twice over — it costs the
+  pager, the colour and `$EDITOR`, *and* it does not work, because the bodies
+  arrive as extra lines rather than long ones, so cutting each line to width
+  leaves every one of them. The fix for a noisy read-only query is a command
+  that goes through `trait Vcs` and lays the answer out with `Table`, cutting
+  at the point where the data is still structured. `commands/branch.rs` is the
+  worked example.
 - **`git status --porcelain=v2` is the only status format we parse.** v1 and
   the human-readable format are not stable enough to parse. Two things about
   reading the *entries* rather than counting them, which `grit detail` does:
@@ -95,7 +107,15 @@ same for the status cache.
   - **`dolt_log.message` is the whole commit message, not its subject.** git's
     `%s` is the subject alone, so `subject_line` trims dolt's to match. Skip it
     and a commit body goes into the dashboard: its lines push the next repo into
-    the wrong columns, and the preview leaves rows stranded above the prompt
+    the wrong columns, and the preview leaves rows stranded above the prompt.
+    `dolt_branches.latest_commit_message` is the same trap, and `grit branch`
+    goes through the same `subject_line`
+  - **a branch's distance from its upstream costs a query each.** `dolt_log`
+    takes a range as a table function, so counting for every branch of a
+    fifteen-branch database means fifteen round trips. `Tracking::Unmeasured`
+    is what the listing carries instead, and only the checked-out branch is
+    upgraded to `Tracked`. Rendering "unmeasured" as `✓` would be the same
+    class of lie as a stale cache
   - **every number may arrive as a string.** With a `dolt sql-server` running
     against the database, `dolt sql` becomes a MySQL client and the wire
     protocol stringifies everything: `"0"`, not `0` or `false`. Both shapes are
@@ -194,16 +214,23 @@ box-drawing. Before changing the table:
   another copy of the alignment code.
 - colour must be off when stdout is not a terminal or `NO_COLOR` is set; the
   integration tests assert this.
-- **the README's dashboard is generated, not drawn.** GitHub cannot colour a
-  fenced block, so the headline example is an SVG — and an SVG is a second copy
-  of the palette. `tests/readme_svg.rs` renders it through the real
-  `build_table` and the real `Theme`, and asserts the committed
-  `assets/status-*.svg` match a fresh render, so repainting `Theme` fails
+- **the README's terminal examples are generated, not drawn.** GitHub cannot
+  colour a fenced block, so they are SVGs — and an SVG is a second copy of the
+  palette. `tests/readme_svg.rs` renders all three through the real code and
+  the real `Theme` — `build_table` for `status-*.svg` and for the picker's
+  rows, `commands::detail::build_card` for `detail-*.svg` — and asserts the
+  committed `assets/*.svg` match a fresh render, so repainting `Theme` fails
   `cargo test` rather than quietly making the README lie. The fix it asks for:
 
   ```bash
   cargo test --test readme_svg -- --ignored
   ```
+
+  Adding an example means adding it to `examples()` and nothing else; the
+  match-and-regenerate tests walk that list. `picker-*.svg` is the one that is
+  not purely grit's output — fzf's prompt, counter and key hints are drawn as
+  plain lines around rows that *are* real, because fzf owns that chrome and
+  grit has no renderer for it.
 
   Two things there are easy to get wrong. `render::svg` is a third *renderer*
   but not a third *layout* — it consumes `render_highlighted`'s text-plus-ranges
@@ -274,15 +301,11 @@ that shell's directory.
 - **A hidden header reserves no width.** `no_header` had to stop the header
   text feeding `natural_widths`, or `CODE` above a two-character code holds the
   column four wide and pushes the path column out.
-- **A distance nobody measured is `None`, never zero.** `Branch::distance` is
-  an `Option` because `(0, 0)` renders as `✓ in sync`, and there are two ways
-  to have no number that are not that: git still names the upstream of a
-  branch whose upstream ref has been *deleted* (`%(upstream:track)` is
-  `[gone]`), and dolt's per-branch counts come from a second invocation that
-  can fail outright. Both used to paint a tick. `dolt sql` also stops at the
-  first statement that errors and exits non-zero, so one never-fetched
-  upstream took every other branch's count down with it — hence the
-  batch-then-one-at-a-time fallback in `fill_distances`.
+- **The card renders branches through `commands::branch::sync_cell`.** Not a
+  second cell builder over the same `Tracking`: `grit branch` and the detail
+  card would otherwise be free to disagree about what `gone`, or a distance
+  nobody measured, looks like. `Detail::branches` is the `Branches` that
+  `Vcs::branches` returns, for the same reason — one reading, one shape.
 - **`grit shell path` exists so the shell does not parse JSON.** `show --json`
   carries the same fact, but reading it from a key binding meant either a jq
   dependency or a grep-and-sed that is wrong on a path with a quote in it.
@@ -290,9 +313,8 @@ that shell's directory.
 ## Not yet built
 
 Interactive TUI (the picker is fzf, not a TUI grit draws), shell completions,
-`grit clone`. For dolt, per-branch ahead/behind costs one query per branch —
-batched into a single invocation, but still a second round trip — and
-`dolt_stashes` records no timestamp at all, so a stash there has no age.
+`grit clone`, `grit log`. For dolt, `dolt_stashes` records no timestamp at all,
+so a stash there has no age.
 
 **`PROMPT_COMMAND` is not grit's variable.** `src/shell/grit.bash` hooks it so
 a table that has scrolled into real output stops being ours to erase. Since

@@ -111,6 +111,8 @@ grit status                     # dashboard across every repo
 grit status --tag release       # just the release group
 grit status api docs            # just these two
 
+grit branch --tag ingress       # every branch of that group, one line each
+
 grit docs commit -am "changelog"  # run git in the docs repo
 grit api log --oneline -n 10      # any git command, flags and all
 grit @release fetch               # run it in every repo tagged `release`
@@ -128,6 +130,7 @@ running anything — see
 | `grit rm <alias>...` | Forget an alias. The repository itself is untouched. Long form: `grit remove`. |
 | `grit show` | Every registered repo: alias, kind, tags, path. |
 | `grit status [alias...]` | Branch, sync state and working-tree state for each repo. |
+| `grit branch [alias...]` | Every branch of every repo, one line each. |
 | `grit detail <alias>` | One repo in depth: changed paths, recent commits, branches, stashes. |
 | `grit <alias> <args...>` | Run the repo's own VCS there, with those arguments. |
 | `grit @<tag> <args...>` | Run it in every repo carrying that tag. |
@@ -135,8 +138,8 @@ running anything — see
 | `grit shell disable [shell]` | Take exactly that block back out. |
 | `grit shell init <shell>` | Print the integration. `zsh`, `bash` or `fish`. |
 
-`show` and `status` both take `--tag <TAG>` and `--json`; `status` also takes a
-list of aliases and `--cached`. `register` takes `--tag` and `--force`, and
+`show`, `status` and `branch` all take `--tag <TAG>` and `--json`; `status` and
+`branch` also take a list of aliases, and `status` takes `--cached`. `register` takes `--tag` and `--force`, and
 `shell enable`/`disable` take `--file`. `--color <auto|always|never>` is
 global; `-k` belongs to the fan-out and goes before the target, as in
 `grit -k @release fetch`.
@@ -150,6 +153,7 @@ ships with the binary instead of drifting from it here:
 ```bash
 grit --help                 # the map, and every environment variable
 grit status --help          # each flag, and how to read the table
+grit branch --help          # why this exists rather than `grit @tag branch`
 grit register --help        # paths, tags, moving an alias somewhere new
 grit detail --help          # what each section shows, and its JSON
 grit show --help            # reading the JSON from a script
@@ -157,36 +161,20 @@ grit shell enable --help    # which file, and the block it writes
 grit help shell enable      # the same thing, spelled the other way
 ```
 
-### One repo, in depth
+### All repos, in depth
 
-`grit status` gives every repo a row. `grit detail <alias>` gives one repo a
+`grit status` gives every repo a row. `grit detail <alias>` gives one of them a
 card: the same header, then a section each for the changed paths, the last few
 commits, the branches and the stash stack. Sections with nothing in them are
 left out rather than headed and empty.
 
-```
-$ grit detail api
-  api  ~/code/api
-  git · release
-
-  feature/rate-limits  →  origin/feature/rate-limits  ↑2  ●2 ○1 ?1
-
-  CHANGES
-  M   src/limits.rs
-   M  src/lib.rs
-  A   src/headers.rs
-   ?  notes.md
-
-  COMMITS
-  15beeba  add rate limit headers                   20m
-  8c31f0d  pull the window size out of the config    2h
-
-  BRANCHES
-  *  feature/rate-limits  origin/feature/rate-limits  ↑2  add rate limit headers  20m
-     main                 origin/main                 ✓   bump chart library      2d
-
-  4 changes · 2 branches
-```
+<p align="left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/detail-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/detail-light.svg">
+    <img alt="grit detail api: the header, then sections for changed paths, recent commits, branches and stashes" src="assets/detail-light.svg" width="760">
+  </picture>
+</p>
 
 The two columns on the left of `CHANGES` are the staged side and the unstaged
 side, in git's letters: `M` modified, `A` added, `D` deleted, `R` renamed,
@@ -198,6 +186,8 @@ not `✓`, which claims the two are level.
 
 Unlike the dashboard this takes a fresh reading every time — it is one repo,
 asked for by name, and the cache exists for the case that is neither.
+`--json` carries the same reading. To reach any of them without typing an
+alias, [`^G^G` opens a picker](#browsing-them-gg) over the lot.
 
 ### Reading the dashboard
 
@@ -319,19 +309,17 @@ eval "$(grit shell init zsh)"
 `^G^G` opens a picker over every registered repo, with `grit detail` rendered
 beside it as you move:
 
-```
-> api                                                 api  ~/code/api
-  api     feature/rate-limits  ↑2  ●3 ○1              git · release
-  docs    main                 ✓   clean
-  webapp  main                 ·   ○2 ?1 ⚑1           feature/rate-limits → origin/…  ↑2
-  4/4                                                 CHANGES
-  enter: run git here · ctrl-d: cd · ctrl-r: refresh   M   src/limits.rs
-                                                       ?  notes.md
-```
+<p align="left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/picker-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eganbruno/grit/main/assets/picker-light.svg">
+    <img alt="the repo picker: every registered repo on one line each, with fzf's prompt and key hints around them" src="assets/picker-light.svg" width="760">
+  </picture>
+</p>
 
 `enter` puts `grit <alias> ` on the command line for you to finish — which
-command you wanted is the part grit cannot guess. `ctrl-d` cds there instead,
-and `ctrl-r` takes a fresh reading.
+command you wanted is the part grit cannot guess. `ctrl-d` cds there, and
+`ctrl-r` takes a fresh reading.
 
 This one needs [fzf](https://github.com/junegunn/fzf) on your `PATH`; without
 it the key says so and does nothing else. grit supplies the two halves — the

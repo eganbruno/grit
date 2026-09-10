@@ -178,6 +178,17 @@ fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or_default().to_string()
 }
 
+/// How much of a commit subject the dashboard shows.
+///
+/// Wide enough for git's conventional 50-column subject with a ticket
+/// reference after it, and cut there whatever the terminal is doing. A subject
+/// has no agreed length — `dolt_log.message` is the whole message, merge
+/// subjects carry a remote URL, and a squashed pull request arrives with its
+/// title and number — so without a ceiling one talkative repo sets the width
+/// for every row, and a run whose stdout is a pipe has no width to fit to at
+/// all.
+pub const SUBJECT_WIDTH: usize = 60;
+
 /// The dashboard as a table, before anyone decides how to paint it.
 ///
 /// Shared with `grit shell preview`, which renders the same geometry into text
@@ -189,6 +200,7 @@ pub fn build_table(rows: &[Row], ctx: &Ctx) -> Table {
     .color(ctx.color)
     .terminal_width(ctx.width)
     .flex(5)
+    .max_width(5, SUBJECT_WIDTH)
     .align(6, Align::Right);
 
     for row in rows {

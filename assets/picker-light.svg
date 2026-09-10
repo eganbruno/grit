@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 796 212" width="796" height="212" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" role="img">
+  <title>grit status</title>
+  <desc>
+  enter: run git here · ctrl-d: cd · ctrl-r: refresh
+  4/4
+
+api        feature/rate-limits  ↑2  ●3 ○1     15beeba  add rate limit headers           20m
+dashboard  main                 ✓   clean     57a90bc  bump chart library to 4.2         2d
+docs       main                 ↓1  clean     430125f  document the webhooks endpoint    3d
+webapp     fix/login-redirect   ✓   ○2 ?1 ⚑1  a36d467  restore scroll position on back   6h
+
+&gt; api
+  </desc>
+  <style>
+    .fg { fill: #24292f }
+    .b { font-weight: 600 }
+    .c-green { fill: #1a7f37 }
+    .c-yellow { fill: #9a6700 }
+    .c-red { fill: #cf222e }
+    .c-blue { fill: #0969da }
+    .c-magenta { fill: #8250df }
+    .c-cyan { fill: #1b7c83 }
+    .c-8 { fill: #6e7781 }
+    .c-238 { fill: #afb8c1 }
+  </style>
+  <rect width="100%" height="100%" rx="6" fill="#ffffff"/>
+  <text y="30.0" xml:space="preserve"><tspan x="32.8" class="c-8">enter: run git here · ctrl-d: cd · ctrl-r: refresh</tspan></text>
+  <text y="50.0" xml:space="preserve"><tspan x="32.8" class="c-8">4/4</tspan></text>
+  <text y="90.0" xml:space="preserve"><tspan x="16.0" class="fg b">api</tspan><tspan x="108.4" class="c-cyan">feature/rate-limits</tspan><tspan x="284.8" class="c-yellow">↑2</tspan><tspan x="318.4" class="c-green">●3</tspan><tspan x="343.6" class="c-yellow">○1</tspan><tspan x="402.4" class="c-yellow">15beeba</tspan><tspan x="478.0" class="fg">add rate limit headers</tspan><tspan x="755.2" class="c-8">20m</tspan></text>
+  <text y="110.0" xml:space="preserve"><tspan x="16.0" class="fg b">dashboard</tspan><tspan x="108.4" class="c-cyan">main</tspan><tspan x="284.8" class="c-green">✓</tspan><tspan x="318.4" class="c-8">clean</tspan><tspan x="402.4" class="c-yellow">57a90bc</tspan><tspan x="478.0" class="fg">bump chart library to 4.2</tspan><tspan x="763.6" class="c-8">2d</tspan></text>
+  <text y="130.0" xml:space="preserve"><tspan x="16.0" class="fg b">docs</tspan><tspan x="108.4" class="c-cyan">main</tspan><tspan x="284.8" class="c-red">↓1</tspan><tspan x="318.4" class="c-8">clean</tspan><tspan x="402.4" class="c-yellow">430125f</tspan><tspan x="478.0" class="fg">document the webhooks endpoint</tspan><tspan x="763.6" class="c-8">3d</tspan></text>
+  <text y="150.0" xml:space="preserve"><tspan x="16.0" class="fg b">webapp</tspan><tspan x="108.4" class="c-cyan">fix/login-redirect</tspan><tspan x="284.8" class="c-green">✓</tspan><tspan x="318.4" class="c-yellow">○2</tspan><tspan x="343.6" class="c-blue">?1</tspan><tspan x="368.8" class="c-magenta">⚑1</tspan><tspan x="402.4" class="c-yellow">a36d467</tspan><tspan x="478.0" class="fg">restore scroll position on back</tspan><tspan x="763.6" class="c-8">6h</tspan></text>
+  <text y="190.0" xml:space="preserve"><tspan x="16.0" class="c-cyan b">&gt; api</tspan></text>
+</svg>

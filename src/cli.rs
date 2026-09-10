@@ -25,6 +25,7 @@ Examples:
   grit -r docs ~/code/docs --tag release   register a repo under an alias
   grit status                              dashboard for every repo
   grit status --tag release                just the release group
+  grit branch --tag release                every branch of that group
   grit show                                aliases, paths and tags
   grit detail docs                         one repo in depth
   grit docs commit -am \"changelog\"         run git in the docs repo
@@ -158,6 +159,34 @@ behind it, because it is one repo and it is asked for by name.
 ";
 
 /// Shown under `grit status --help`.
+/// Shown under `grit branch --help`.
+const BRANCH_HELP: &str = "\
+Examples:
+  grit branch                  every branch of every registered repo
+  grit branch efdb pipeline    just these two repos
+  grit branch --tag ingress    just the repos tagged `ingress`
+  grit branch --json           the full listing, machine-readable
+
+Reading the table:
+  *       marks the branch that is checked out
+  SYNC    ✓ in sync · ↑n ahead · ↓n behind · · no upstream · gone deleted
+          upstream · blank when the distance was not measured
+  SUBJECT the commit subject, cut to fit — the full message is never printed
+
+Local branches only, most recently committed first.
+
+This is `git branch -vv` and `dolt branch -v` rendered by grit rather than by
+git and dolt, which is the point: both of those print a commit *message* where
+this prints a subject, so one repo with a paragraph-long commit turns a listing
+into pages of prose. Compare:
+
+  grit @ingress branch -vv     passthrough — whatever git and dolt print
+  grit branch --tag ingress    one line per branch, aligned across repos
+
+Dolt measures the distance to an upstream with a query per branch, so only the
+checked-out branch carries one; the rest show their upstream with a blank SYNC.
+";
+
 const STATUS_HELP: &str = "\
 Examples:
   grit status                  every registered repo
@@ -288,6 +317,10 @@ pub enum Command {
     #[command(after_help = STATUS_HELP)]
     Status(StatusArgs),
 
+    /// Every branch of every repo, one line each.
+    #[command(after_help = BRANCH_HELP)]
+    Branch(BranchArgs),
+
     /// One repo in depth: changed paths, recent commits, branches, stashes.
     #[command(after_help = DETAIL_HELP)]
     Detail(DetailArgs),
@@ -332,6 +365,20 @@ pub struct RemoveArgs {
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     /// Only show repos carrying this tag.
+    #[arg(short, long, value_name = "TAG")]
+    pub tag: Option<String>,
+
+    /// Emit JSON instead of a table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct BranchArgs {
+    /// Only these aliases. Default is every registered repo.
+    pub aliases: Vec<String>,
+
+    /// Only repos carrying this tag.
     #[arg(short, long, value_name = "TAG")]
     pub tag: Option<String>,
 

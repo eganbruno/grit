@@ -12,8 +12,8 @@ use std::process::{Command, ExitStatus, Stdio};
 use crate::error::{Error, Result};
 use crate::registry::VcsKind;
 use crate::vcs::{
-    Branch, Change, Commit, Detail, Distance, FileChange, LOG_LIMIT, RepoState, Snapshot, Stash,
-    Vcs,
+    Branch, Branches, Change, Commit, Detail, FileChange, LOG_LIMIT, RepoState, Snapshot, Stash,
+    Tracking, Vcs,
 };
 
 /// Field separator for `git log --format`. ASCII unit separator: cannot appear
@@ -39,20 +39,20 @@ const STATUS_ARGS: &[&str] = &[
 /// `git stash list` fields: `stash@{0}`, the message, the relative age.
 const STASH_FORMAT: &str = "--format=%gd\u{1f}%gs\u{1f}%cr";
 
-/// `git for-each-ref` fields, in the order [`parse_branch_list`] reads them.
+/// Fields for `git for-each-ref`, in the order [`parse_branches`] reads them.
 ///
-/// `%1f` rather than `%x1f`: for-each-ref spells a hex escape with the digits
-/// alone, and `%x1f` would put a literal `x` in the output.
-const BRANCH_FORMAT: &str = concat!(
-    "--format=",
-    "%(refname:short)%1f",
-    "%(upstream:short)%1f",
-    "%(upstream:track)%1f",
-    "%(objectname:short)%1f",
-    "%(contents:subject)%1f",
-    "%(committerdate:relative)%1f",
-    "%(HEAD)"
-);
+/// `%(contents:subject)` rather than `%(contents)`: the subject is one line by
+/// construction, where the full message would put a commit body in the middle
+/// of a table. This is the same cut dolt's [`super::dolt::subject_line`] has to
+/// make by hand, and here git makes it for us.
+const REF_FORMAT: &str = "--format=\
+%(HEAD)\u{1f}\
+%(refname:short)\u{1f}\
+%(objectname:short)\u{1f}\
+%(upstream:short)\u{1f}\
+%(upstream:track)\u{1f}\
+%(contents:subject)\u{1f}\
+%(committerdate:relative)";
 
 pub struct GitVcs;
 
@@ -109,6 +109,26 @@ impl Vcs for GitVcs {
         Ok(snapshot)
     }
 
+    fn branches(&self, path: &Path) -> Result<Branches> {
+        if !path.exists() {
+            return Ok(Branches::Missing);
+        }
+
+        // Sorted by git rather than by us: `-committerdate` puts the branch
+        // you touched last at the top, which is the order a listing is read in.
+        let out = capture(
+            path,
+            &[
+                "for-each-ref",
+                "--sort=-committerdate",
+                REF_FORMAT,
+                "refs/heads",
+            ],
+        )?;
+
+        Ok(Branches::Listed(parse_branches(&out)))
+    }
+
     fn detail(&self, path: &Path) -> Result<Detail> {
         if !path.exists() {
             return Ok(Detail {
@@ -116,6 +136,7 @@ impl Vcs for GitVcs {
                     state: RepoState::Missing,
                     ..Snapshot::default()
                 },
+                branches: Branches::Missing,
                 ..Detail::default()
             });
         }
@@ -125,10 +146,10 @@ impl Vcs for GitVcs {
             files,
         } = parse_status(&capture(path, STATUS_ARGS)?);
 
-        // Each of the three below is one cheap call, and each is allowed to
-        // fail into an empty list: a repo with no commits has no log, one with
-        // no stashes has no `refs/stash`, and neither is a reason to refuse the
-        // whole reading. `snapshot` takes the same view.
+        // Each of these is one cheap call, and each is allowed to fail into an
+        // empty list: a repo with no commits has no log, one with no stashes
+        // has no `refs/stash`, and neither is a reason to refuse the whole
+        // reading. `snapshot` takes the same view.
         let commits = capture(path, &["log", "-n", &LOG_LIMIT.to_string(), LOG_FORMAT])
             .map(|out| parse_log(&out))
             .unwrap_or_default();
@@ -142,9 +163,9 @@ impl Vcs for GitVcs {
             .unwrap_or_default();
         snapshot.stashes = stashes.len() as u32;
 
-        let branches = capture(path, &["for-each-ref", BRANCH_FORMAT, "refs/heads"])
-            .map(|out| parse_branch_list(&out))
-            .unwrap_or_default();
+        // Through the trait method rather than a reading of its own, so the
+        // card and `grit branch` cannot come to disagree about the same repo.
+        let branches = self.branches(path).unwrap_or_default();
 
         if let Some(state) = in_progress_state(path) {
             snapshot.state = state;
@@ -352,70 +373,6 @@ fn parse_stash_list(out: &str) -> Vec<Stash> {
         .collect()
 }
 
-/// Parse `git for-each-ref` in [`BRANCH_FORMAT`].
-fn parse_branch_list(out: &str) -> Vec<Branch> {
-    out.lines()
-        .filter_map(|line| {
-            let mut fields = line.split(SEP);
-            let name = fields.next()?.trim().to_string();
-            if name.is_empty() {
-                return None;
-            }
-
-            let upstream = fields.next().unwrap_or_default().trim().to_string();
-            let track = fields.next().unwrap_or_default();
-            let short_id = fields.next().unwrap_or_default().trim().to_string();
-            let subject = fields.next().unwrap_or_default().to_string();
-            let age = compact_relative_time(fields.next().unwrap_or_default());
-            // git marks the checked-out branch with `*` and every other one
-            // with a space, so this field is present either way.
-            let head = fields.next().unwrap_or_default().trim() == "*";
-
-            Some(Branch {
-                name,
-                distance: (!upstream.is_empty()).then(|| parse_track(track)).flatten(),
-                upstream: (!upstream.is_empty()).then_some(upstream),
-                head,
-                tip: (!short_id.is_empty()).then_some(Commit {
-                    short_id,
-                    subject,
-                    age,
-                }),
-            })
-        })
-        .collect()
-}
-
-/// Read `%(upstream:track)`: `[ahead 2]`, `[behind 1]`, `[ahead 2, behind 1]`,
-/// `[gone]`, or nothing at all.
-///
-/// Empty is level with the upstream — git writes nothing rather than
-/// `[ahead 0, behind 0]` — so it is a real `Some(0, 0)`.
-///
-/// `[gone]` is `None`, and that distinction is the point of the return type.
-/// The upstream ref has been deleted, so there is no distance to report; git
-/// still names the upstream in `%(upstream:short)`, so a caller that read this
-/// as zero would put a ✓ against a branch tracking something that is no longer
-/// there.
-fn parse_track(track: &str) -> Option<Distance> {
-    let body = track.trim().trim_start_matches('[').trim_end_matches(']');
-    if body == "gone" {
-        return None;
-    }
-
-    let mut distance = Distance::default();
-    for part in body.split(',') {
-        let mut words = part.split_whitespace();
-        match (words.next(), words.next()) {
-            (Some("ahead"), Some(n)) => distance.ahead = n.parse().unwrap_or(0),
-            (Some("behind"), Some(n)) => distance.behind = n.parse().unwrap_or(0),
-            _ => {}
-        }
-    }
-
-    Some(distance)
-}
-
 /// Parse one `# branch.*` header line (the `# ` prefix already stripped).
 fn parse_branch_header(rest: &str, snap: &mut Snapshot) {
     let Some((key, value)) = split_once_ws(rest) else {
@@ -458,6 +415,89 @@ fn parse_log_line(out: &str) -> Option<Commit> {
         age: compact_relative_time(fields.next().unwrap_or_default()),
         short_id,
     })
+}
+
+/// Parse the lines produced by [`REF_FORMAT`], one branch each.
+fn parse_branches(out: &str) -> Vec<Branch> {
+    out.lines().filter_map(parse_branch_line).collect()
+}
+
+fn parse_branch_line(line: &str) -> Option<Branch> {
+    let mut fields = line.split(SEP);
+
+    // `%(HEAD)` is `*` on the checked-out branch and a space on every other,
+    // so the marker is the field's content rather than its presence.
+    let is_head = fields.next()?.trim() == "*";
+
+    let name = fields.next()?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let short_id = fields.next().unwrap_or_default().trim().to_string();
+    let upstream = fields.next().unwrap_or_default().trim();
+    let track = fields.next().unwrap_or_default().trim();
+    let subject = fields.next().unwrap_or_default().to_string();
+    let age = compact_relative_time(fields.next().unwrap_or_default());
+
+    Some(Branch {
+        name,
+        is_head,
+        tracking: parse_track(upstream, track),
+        head: (!short_id.is_empty()).then_some(Commit {
+            short_id,
+            subject,
+            age,
+        }),
+    })
+}
+
+/// Read `%(upstream:short)` and `%(upstream:track)` into a [`Tracking`].
+///
+/// The track field is git's own bracketed phrasing: empty when the branch is
+/// level with its upstream, `[gone]` when the remote branch has been deleted,
+/// and otherwise some combination of `[ahead 2, behind 1]`. Anything that does
+/// not parse is treated as level rather than guessed at — the upstream name is
+/// the part that matters, and inventing a count would be worse than omitting
+/// one.
+fn parse_track(upstream: &str, track: &str) -> Tracking {
+    if upstream.is_empty() {
+        return Tracking::Untracked;
+    }
+
+    let upstream = upstream.to_string();
+    let inner = track
+        .trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or_default();
+
+    if inner == "gone" {
+        return Tracking::Gone { upstream };
+    }
+
+    let mut ahead = 0;
+    let mut behind = 0;
+    for part in inner.split(',') {
+        let mut words = part.split_whitespace();
+        let (Some(word), Some(count)) = (words.next(), words.next()) else {
+            continue;
+        };
+        let Ok(count) = count.parse::<u32>() else {
+            continue;
+        };
+        match word {
+            "ahead" => ahead = count,
+            "behind" => behind = count,
+            _ => {}
+        }
+    }
+
+    Tracking::Tracked {
+        upstream,
+        ahead,
+        behind,
+    }
 }
 
 /// Squeeze git's `%cr` into something that fits a column: `28 hours ago` → `28h`.
@@ -728,65 +768,6 @@ stash@{1}\u{1f}On main: wip: fiddling with a\u{1f}2 days ago
     }
 
     #[test]
-    fn a_branch_line_is_read_field_by_field() {
-        let out = "main\u{1f}origin/main\u{1f}[ahead 2]\u{1f}5b38814\u{1f}local only 2\u{1f}3 hours ago\u{1f}*\n";
-        let branches = parse_branch_list(out);
-        assert_eq!(branches.len(), 1);
-
-        let branch = &branches[0];
-        assert_eq!(branch.name, "main");
-        assert_eq!(branch.upstream.as_deref(), Some("origin/main"));
-        assert_eq!(branch.distance, distance(2, 0));
-        assert!(branch.head);
-
-        let tip = branch.tip.as_ref().expect("the branch has a commit");
-        assert_eq!(tip.short_id, "5b38814");
-        assert_eq!(tip.age, "3h");
-    }
-
-    #[test]
-    fn a_branch_that_is_not_checked_out_is_not_marked() {
-        let out = "side\u{1f}\u{1f}\u{1f}abc1234\u{1f}wip\u{1f}2 days ago\u{1f}\n";
-        let branch = parse_branch_list(out).remove(0);
-        assert!(!branch.head);
-        assert_eq!(branch.upstream, None);
-        // No upstream means nothing to measure against, not a measurement of
-        // zero — the same distinction `[gone]` turns on.
-        assert_eq!(branch.distance, None);
-    }
-
-    fn distance(ahead: u32, behind: u32) -> Option<Distance> {
-        Some(Distance { ahead, behind })
-    }
-
-    #[test]
-    fn the_tracking_field_is_read_in_all_the_shapes_git_writes_it() {
-        // Empty is level, not unknown: git writes nothing rather than
-        // `[ahead 0, behind 0]` for a branch that matches its upstream.
-        assert_eq!(parse_track(""), distance(0, 0));
-        assert_eq!(parse_track("[ahead 2]"), distance(2, 0));
-        assert_eq!(parse_track("[behind 7]"), distance(0, 7));
-        assert_eq!(parse_track("[ahead 2, behind 7]"), distance(2, 7));
-    }
-
-    #[test]
-    fn an_upstream_that_is_gone_reports_no_distance_at_all() {
-        // Not zero, which reads as "in sync". There is nothing left to be in
-        // sync with — and git still names the upstream in `%(upstream:short)`,
-        // so this is the only field that can say so.
-        assert_eq!(parse_track("[gone]"), None);
-    }
-
-    #[test]
-    fn a_branch_with_a_deleted_upstream_keeps_the_name_and_loses_the_distance() {
-        let out =
-            "main\u{1f}origin/main\u{1f}[gone]\u{1f}abc1234\u{1f}one\u{1f}2 days ago\u{1f}*\n";
-        let branch = parse_branch_list(out).remove(0);
-        assert_eq!(branch.upstream.as_deref(), Some("origin/main"));
-        assert_eq!(branch.distance, None);
-    }
-
-    #[test]
     fn clean_repo_has_no_counts() {
         let s = parse_status(CLEAN).snapshot;
         assert_eq!(s.branch.as_deref(), Some("main"));
@@ -935,6 +916,158 @@ stash@{1}\u{1f}On main: wip: fiddling with a\u{1f}2 days ago
     fn a_repo_with_no_commits_yields_no_head() {
         assert_eq!(parse_log_line(""), None);
         assert_eq!(parse_log_line("\n"), None);
+    }
+
+    /// One line per branch, in [`REF_FORMAT`]'s field order. Captured from
+    /// `git for-each-ref` against a real repository.
+    fn ref_line(
+        head: &str,
+        name: &str,
+        id: &str,
+        upstream: &str,
+        track: &str,
+        subject: &str,
+        age: &str,
+    ) -> String {
+        [head, name, id, upstream, track, subject, age].join("\u{1f}")
+    }
+
+    #[test]
+    fn the_checked_out_branch_is_the_one_git_marks() {
+        let out = [
+            ref_line(
+                "*",
+                "main",
+                "4142765",
+                "origin/main",
+                "",
+                "bump deps",
+                "8 days ago",
+            ),
+            ref_line(" ", "wip", "d1b43d8", "", "", "spike", "7 days ago"),
+        ]
+        .join("\n");
+
+        let branches = parse_branches(&out);
+        assert_eq!(branches.len(), 2);
+        assert!(branches[0].is_head);
+        assert!(!branches[1].is_head);
+    }
+
+    #[test]
+    fn a_branch_level_with_its_upstream_is_tracked_at_zero() {
+        let out = ref_line(
+            " ",
+            "main",
+            "4142765",
+            "origin/main",
+            "",
+            "bump deps",
+            "8 days ago",
+        );
+        assert_eq!(
+            parse_branches(&out)[0].tracking,
+            Tracking::Tracked {
+                upstream: "origin/main".to_string(),
+                ahead: 0,
+                behind: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn ahead_and_behind_are_read_out_of_gits_bracketed_phrase() {
+        assert_eq!(
+            parse_track("origin/main", "[ahead 2]"),
+            Tracking::Tracked {
+                upstream: "origin/main".into(),
+                ahead: 2,
+                behind: 0
+            }
+        );
+        assert_eq!(
+            parse_track("origin/main", "[behind 3]"),
+            Tracking::Tracked {
+                upstream: "origin/main".into(),
+                ahead: 0,
+                behind: 3
+            }
+        );
+        assert_eq!(
+            parse_track("origin/main", "[ahead 21, behind 3]"),
+            Tracking::Tracked {
+                upstream: "origin/main".into(),
+                ahead: 21,
+                behind: 3
+            }
+        );
+    }
+
+    #[test]
+    fn a_branch_with_no_upstream_is_untracked() {
+        assert_eq!(parse_track("", ""), Tracking::Untracked);
+    }
+
+    #[test]
+    fn a_deleted_upstream_is_gone_rather_than_level() {
+        // `[gone]` and `` are both "no counts", but one of them is a problem.
+        assert_eq!(
+            parse_track("origin/old", "[gone]"),
+            Tracking::Gone {
+                upstream: "origin/old".into()
+            }
+        );
+    }
+
+    #[test]
+    fn an_unparseable_track_field_keeps_the_upstream_and_drops_the_counts() {
+        // A future git wording change should cost the distance, not the row.
+        assert_eq!(
+            parse_track("origin/main", "[sideways 4]"),
+            Tracking::Tracked {
+                upstream: "origin/main".into(),
+                ahead: 0,
+                behind: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_branch_name_containing_a_slash_survives() {
+        let out = ref_line(
+            " ",
+            "ingress/eea-2026",
+            "1a24371",
+            "",
+            "",
+            "lint",
+            "6 weeks ago",
+        );
+        assert_eq!(parse_branches(&out)[0].name, "ingress/eea-2026");
+    }
+
+    #[test]
+    fn a_subject_containing_the_separators_neighbours_survives() {
+        // Spaces, brackets and a comma are all ordinary in a subject; only the
+        // unit separator splits fields, and it cannot appear in one.
+        let subject = "Merge pull request #301 [ahead 2], with a, comma";
+        let out = ref_line(" ", "main", "4142765", "", "", subject, "3 weeks ago");
+        assert_eq!(
+            parse_branches(&out)[0].head.as_ref().unwrap().subject,
+            subject
+        );
+    }
+
+    #[test]
+    fn ages_are_compacted_the_same_way_the_dashboard_compacts_them() {
+        let out = ref_line(" ", "main", "4142765", "", "", "bump deps", "20 hours ago");
+        assert_eq!(parse_branches(&out)[0].head.as_ref().unwrap().age, "20h");
+    }
+
+    #[test]
+    fn a_repo_with_no_branches_lists_none() {
+        assert!(parse_branches("").is_empty());
+        assert!(parse_branches("\n\n").is_empty());
     }
 
     #[test]

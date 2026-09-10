@@ -63,6 +63,92 @@ pub struct Commit {
     pub age: String,
 }
 
+/// One branch as a listing needs it.
+///
+/// Deliberately not a `Snapshot`: a listing wants many branches cheaply, and
+/// most of what a snapshot carries (the working tree's counts, the stash, an
+/// in-progress merge) belongs to the checkout rather than to a branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Branch {
+    pub name: String,
+    /// True for the branch that is checked out.
+    pub is_head: bool,
+    pub tracking: Tracking,
+    /// `None` on a branch with no commits, which git allows on an unborn HEAD.
+    pub head: Option<Commit>,
+}
+
+/// The result of listing one repository's branches.
+///
+/// `Missing` is a variant rather than an error for the same reason
+/// [`RepoState::Missing`] is: a registered path that has been deleted is
+/// information about that repo, not a failure of the command, and it must not
+/// take the exit code down with it. An empty `Listed` means something else
+/// entirely — a real repository with no commits yet — and the two would be
+/// indistinguishable as a bare `Vec`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Branches {
+    Listed(Vec<Branch>),
+    Missing,
+}
+
+impl Default for Branches {
+    /// An empty listing, which is not `Missing`. `Missing` is the positive
+    /// claim that the registered path is gone; the default is only "nothing
+    /// has been read into this yet".
+    fn default() -> Self {
+        Branches::Listed(Vec::new())
+    }
+}
+
+impl Branches {
+    pub fn as_slice(&self) -> &[Branch] {
+        match self {
+            Branches::Listed(branches) => branches,
+            Branches::Missing => &[],
+        }
+    }
+}
+
+/// A branch's relationship to its upstream.
+///
+/// Four cases rather than an `Option<(u32, u32)>`, because "no upstream", "the
+/// upstream was deleted" and "nobody counted" are three different things and a
+/// listing that renders them identically is lying about two of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum Tracking {
+    /// No upstream is configured.
+    Untracked,
+    /// Tracking `upstream`, and this far from it.
+    Tracked {
+        upstream: String,
+        ahead: u32,
+        behind: u32,
+    },
+    /// Tracking `upstream`, which no longer exists on the remote.
+    Gone { upstream: String },
+    /// Tracking `upstream`; the distance was not measured.
+    ///
+    /// Dolt counts commits with a `dolt_log(<range>)` query, which takes one
+    /// round trip per branch — so a listing that measured every branch of a
+    /// fifteen-branch database would spend fifteen. The checked-out branch is
+    /// measured because it is the one being worked on; the rest report their
+    /// upstream without a distance.
+    Unmeasured { upstream: String },
+}
+
+impl Tracking {
+    pub fn upstream(&self) -> Option<&str> {
+        match self {
+            Tracking::Untracked => None,
+            Tracking::Tracked { upstream, .. }
+            | Tracking::Gone { upstream }
+            | Tracking::Unmeasured { upstream } => Some(upstream),
+        }
+    }
+}
+
 /// What the repository is in the middle of, if anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -107,7 +193,9 @@ pub struct Detail {
     /// Most recent first, capped by the backend at [`LOG_LIMIT`].
     pub commits: Vec<Commit>,
     pub stashes: Vec<Stash>,
-    pub branches: Vec<Branch>,
+    /// Exactly what [`Vcs::branches`] answers, rather than a second reading of
+    /// the same thing: `grit branch` and the detail card show one list.
+    pub branches: Branches,
 }
 
 /// How many commits a detail reading walks back.
@@ -181,40 +269,6 @@ pub struct Stash {
     pub age: String,
 }
 
-/// How far a branch stands from its upstream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Distance {
-    pub ahead: u32,
-    pub behind: u32,
-}
-
-impl Distance {
-    pub fn is_level(self) -> bool {
-        self.ahead == 0 && self.behind == 0
-    }
-}
-
-/// One branch, and how it stands against its upstream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Branch {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upstream: Option<String>,
-    /// How far from the upstream, when that could be measured.
-    ///
-    /// `None` is not `Some(Distance::default())`. A branch whose upstream has
-    /// been deleted, or one on a backend that could not run the count, has no
-    /// distance to report — and rendering that as zero would put a ✓ against
-    /// a branch nobody has compared with anything.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub distance: Option<Distance>,
-    /// True for the branch that is checked out.
-    pub head: bool,
-    /// The commit at the tip. `None` on a branch with no commits.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tip: Option<Commit>,
-}
-
 pub trait Vcs: Send + Sync {
     fn kind(&self) -> VcsKind;
 
@@ -226,6 +280,13 @@ pub trait Vcs: Send + Sync {
 
     /// Read the repository's current state.
     fn snapshot(&self, path: &Path) -> Result<Snapshot>;
+
+    /// List the repository's local branches, most recently committed first.
+    ///
+    /// Local only. A listing that included every remote-tracking ref would be
+    /// dominated by them on any repo with a real remote, which is the opposite
+    /// of what a summary is for.
+    fn branches(&self, path: &Path) -> Result<Branches>;
 
     /// Read the repository in depth: changed paths, recent commits, stashes
     /// and branches, as well as everything [`Self::snapshot`] reads.

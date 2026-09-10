@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 771 532" width="771" height="532" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" role="img">
+  <title>grit status</title>
+  <desc>
+$ grit detail api
+
+  api  /repos/api
+  git · release
+
+  feature/rate-limits  →  origin/feature/rate-limits  ↑2  ●2 ○1 ?1
+
+  CHANGES
+  M   src/limits.rs
+   M  src/lib.rs
+  A   src/headers.rs
+   ?  notes.md
+
+  COMMITS
+  15beeba  add rate limit headers                  20m
+  8c31f0d  pull the window size out of the config   2h
+
+  BRANCHES
+  *  feature/rate-limits  origin/feature/rate-limits  ↑2  add rate limit headers     20m
+     main                 origin/main                 ✓   bump chart library to 4.2   2d
+
+  STASHES
+  stash@{0}  On main: half a migration  4h
+
+  4 changes · 2 branches · 1 stash
+  </desc>
+  <style>
+    .fg { fill: #24292f }
+    .b { font-weight: 600 }
+    .c-green { fill: #1a7f37 }
+    .c-yellow { fill: #9a6700 }
+    .c-red { fill: #cf222e }
+    .c-blue { fill: #0969da }
+    .c-magenta { fill: #8250df }
+    .c-cyan { fill: #1b7c83 }
+    .c-8 { fill: #6e7781 }
+    .c-238 { fill: #afb8c1 }
+  </style>
+  <rect width="100%" height="100%" rx="6" fill="#ffffff"/>
+  <text y="30.0" xml:space="preserve"><tspan x="16.0" class="c-8">$ grit detail api</tspan></text>
+  <text y="70.0" xml:space="preserve"><tspan x="32.8" class="fg b">api</tspan><tspan x="74.8" class="c-8">/repos/api</tspan></text>
+  <text y="90.0" xml:space="preserve"><tspan x="32.8" class="c-blue">git</tspan><tspan x="66.4" class="c-8">·</tspan><tspan x="83.2" class="c-magenta">release</tspan></text>
+  <text y="130.0" xml:space="preserve"><tspan x="32.8" class="c-cyan">feature/rate-limits</tspan><tspan x="209.2" class="c-8">→</tspan><tspan x="234.4" class="c-8">origin/feature/rate-limits</tspan><tspan x="469.6" class="c-yellow">↑2</tspan><tspan x="503.2" class="c-green">●2</tspan><tspan x="528.4" class="c-yellow">○1</tspan><tspan x="553.6" class="c-blue">?1</tspan></text>
+  <text y="170.0" xml:space="preserve"><tspan x="32.8" class="c-8">CHANGES</tspan></text>
+  <text y="190.0" xml:space="preserve"><tspan x="32.8" class="c-green">M</tspan><tspan x="66.4" class="fg">src/limits.rs</tspan></text>
+  <text y="210.0" xml:space="preserve"><tspan x="41.2" class="c-yellow">M</tspan><tspan x="66.4" class="fg">src/lib.rs</tspan></text>
+  <text y="230.0" xml:space="preserve"><tspan x="32.8" class="c-green">A</tspan><tspan x="66.4" class="fg">src/headers.rs</tspan></text>
+  <text y="250.0" xml:space="preserve"><tspan x="41.2" class="c-blue">?</tspan><tspan x="66.4" class="fg">notes.md</tspan></text>
+  <text y="290.0" xml:space="preserve"><tspan x="32.8" class="c-8">COMMITS</tspan></text>
+  <text y="310.0" xml:space="preserve"><tspan x="32.8" class="c-yellow">15beeba</tspan><tspan x="108.4" class="fg">add rate limit headers</tspan><tspan x="444.4" class="c-8">20m</tspan></text>
+  <text y="330.0" xml:space="preserve"><tspan x="32.8" class="c-yellow">8c31f0d</tspan><tspan x="108.4" class="fg">pull the window size out of the config</tspan><tspan x="452.8" class="c-8">2h</tspan></text>
+  <text y="370.0" xml:space="preserve"><tspan x="32.8" class="c-8">BRANCHES</tspan></text>
+  <text y="390.0" xml:space="preserve"><tspan x="32.8" class="c-green">*</tspan><tspan x="58.0" class="c-cyan">feature/rate-limits</tspan><tspan x="234.4" class="c-8">origin/feature/rate-limits</tspan><tspan x="469.6" class="c-yellow">↑2</tspan><tspan x="503.2" class="fg">add rate limit headers</tspan><tspan x="730.0" class="c-8">20m</tspan></text>
+  <text y="410.0" xml:space="preserve"><tspan x="58.0" class="c-cyan">main</tspan><tspan x="234.4" class="c-8">origin/main</tspan><tspan x="469.6" class="c-green">✓</tspan><tspan x="503.2" class="fg">bump chart library to 4.2</tspan><tspan x="738.4" class="c-8">2d</tspan></text>
+  <text y="450.0" xml:space="preserve"><tspan x="32.8" class="c-8">STASHES</tspan></text>
+  <text y="470.0" xml:space="preserve"><tspan x="32.8" class="c-magenta">stash@{0}</tspan><tspan x="125.2" class="fg">On main: half a migration</tspan><tspan x="352.0" class="c-8">4h</tspan></text>
+  <text y="510.0" xml:space="preserve"><tspan x="32.8" class="c-8">4 changes · 2 branches · 1 stash</tspan></text>
+</svg>

@@ -1,4 +1,4 @@
-//! The README's headline dashboard, rendered to the SVGs the README shows.
+//! The README's terminal examples, rendered to the SVGs it shows.
 //!
 //! GitHub cannot colour a fenced code block, so the example that exists to show
 //! that colour carries meaning has to be an image. An image is a copy, and a
@@ -25,12 +25,15 @@
 
 use std::path::{Path, PathBuf};
 
+use grit::commands::detail::{Block, build_card};
 use grit::commands::status::{Row, build_table, summarise};
 use grit::context::Ctx;
 use grit::registry::{Registry, Repo, RepoEntry, VcsKind};
 use grit::render::svg::{DARK, LIGHT, Palette, Screen};
 use grit::render::{Theme, footer};
-use grit::vcs::{Commit, RepoState, Snapshot};
+use grit::vcs::{
+    Branch, Branches, Change, Commit, Detail, FileChange, RepoState, Snapshot, Stash, Tracking,
+};
 
 /// The command line shown above the table.
 const PROMPT: &str = "$ grit status";
@@ -122,10 +125,7 @@ fn rows() -> Vec<Row> {
 /// inside, and a `…` in the README would be an artefact of this harness rather
 /// than something grit did.
 fn screen() -> Screen {
-    let registry = Registry::load_from(PathBuf::from("/nonexistent/grit-readme.toml"))
-        .expect("a missing registry file is an empty registry");
-    let ctx = Ctx::with_registry(registry, false, None);
-
+    let ctx = ctx();
     let rows = rows();
     let mut screen = Screen::new();
     screen.line(PROMPT, Theme::muted());
@@ -142,10 +142,164 @@ fn screen() -> Screen {
     screen
 }
 
-fn asset(palette: &Palette) -> PathBuf {
+/// The margin `Table` indents by, which the card's loose lines share.
+const MARGIN: &str = "  ";
+
+/// The repo the detail card and the picker are both about.
+///
+/// One repo with one of everything, so the card shows every section and the
+/// two columns of `CHANGES` show both sides.
+fn detailed() -> (Repo, Detail) {
+    let mut repo = repo("api");
+    repo.entry.tags = vec!["release".to_string()];
+
+    let snapshot = Snapshot {
+        ahead: 2,
+        staged: 2,
+        unstaged: 1,
+        untracked: 1,
+        ..snapshot(
+            "feature/rate-limits",
+            "15beeba",
+            "add rate limit headers",
+            "20m",
+        )
+    };
+
+    let file = |path: &str, staged, unstaged| FileChange {
+        path: path.to_string(),
+        origin: None,
+        staged,
+        unstaged,
+    };
+
+    let detail = Detail {
+        files: vec![
+            file("src/limits.rs", Some(Change::Modified), None),
+            file("src/lib.rs", None, Some(Change::Modified)),
+            file("src/headers.rs", Some(Change::Added), None),
+            file("notes.md", None, Some(Change::Untracked)),
+        ],
+        commits: vec![
+            Commit {
+                short_id: "15beeba".into(),
+                subject: "add rate limit headers".into(),
+                age: "20m".into(),
+            },
+            Commit {
+                short_id: "8c31f0d".into(),
+                subject: "pull the window size out of the config".into(),
+                age: "2h".into(),
+            },
+        ],
+        stashes: vec![Stash {
+            id: "stash@{0}".into(),
+            message: "On main: half a migration".into(),
+            age: "4h".into(),
+        }],
+        branches: Branches::Listed(vec![
+            Branch {
+                name: "feature/rate-limits".into(),
+                is_head: true,
+                tracking: Tracking::Tracked {
+                    upstream: "origin/feature/rate-limits".into(),
+                    ahead: 2,
+                    behind: 0,
+                },
+                head: Some(Commit {
+                    short_id: "15beeba".into(),
+                    subject: "add rate limit headers".into(),
+                    age: "20m".into(),
+                }),
+            },
+            Branch {
+                name: "main".into(),
+                is_head: false,
+                tracking: Tracking::Tracked {
+                    upstream: "origin/main".into(),
+                    ahead: 0,
+                    behind: 0,
+                },
+                head: Some(Commit {
+                    short_id: "57a90bc".into(),
+                    subject: "bump chart library to 4.2".into(),
+                    age: "2d".into(),
+                }),
+            },
+        ]),
+        snapshot,
+    };
+
+    (repo, detail)
+}
+
+/// `grit detail api`: the card, laid out by the same blocks the terminal gets.
+fn detail_screen() -> Screen {
+    let ctx = ctx();
+    let (repo, detail) = detailed();
+
+    let mut screen = Screen::new();
+    screen.line("$ grit detail api", Theme::muted());
+
+    for block in build_card(&repo, &detail, &ctx) {
+        match block {
+            Block::Blank => screen.blank(),
+            Block::Line(cell) => screen.cell(MARGIN, &cell),
+            Block::Section(title, table) => {
+                screen.cell(
+                    MARGIN,
+                    &grit::render::Cell::styled(title.to_uppercase(), Theme::header()),
+                );
+                screen.table(&table);
+            }
+        }
+    }
+
+    screen
+}
+
+/// The picker `^G^G` opens: fzf's chrome around grit's own rows.
+///
+/// The rows are the real thing — `grit shell rows` renders exactly this table,
+/// headerless and flush left, and that is what fzf is handed on stdin. Only
+/// the prompt, the counter and the key hints are fzf's, and they are the parts
+/// grit does not draw.
+fn picker_screen() -> Screen {
+    let ctx = ctx();
+    let rows = rows();
+
+    let mut screen = Screen::new();
+    screen.line(
+        "  enter: run git here · ctrl-d: cd · ctrl-r: refresh",
+        Theme::muted(),
+    );
+    screen.line("  4/4", Theme::muted());
+    screen.blank();
+    screen.table(&build_table(&rows, &ctx).no_header().no_rule().no_indent());
+    screen.blank();
+    screen.line("> api", Theme::banner());
+    screen
+}
+
+fn ctx() -> Ctx {
+    let registry = Registry::load_from(PathBuf::from("/nonexistent/grit-readme.toml"))
+        .expect("a missing registry file is an empty registry");
+    Ctx::with_registry(registry, false, None)
+}
+
+fn asset(name: &str, palette: &Palette) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
-        .join(format!("status-{}.svg", palette.name))
+        .join(format!("{name}-{}.svg", palette.name))
+}
+
+/// Every example the README shows, by the name its files carry.
+fn examples() -> Vec<(&'static str, Screen)> {
+    vec![
+        ("status", screen()),
+        ("detail", detail_screen()),
+        ("picker", picker_screen()),
+    ]
 }
 
 #[test]
@@ -191,34 +345,68 @@ fn the_sync_and_state_columns_are_actually_painted() {
 }
 
 #[test]
-fn committed_svgs_match_a_fresh_render() {
-    for palette in [&LIGHT, &DARK] {
-        let path = asset(palette);
-        let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            panic!(
-                "{} is missing ({e}); regenerate with \
-                 `cargo test --test readme_svg -- --ignored`",
-                path.display()
-            )
-        });
+fn the_card_shows_every_section_and_both_sides_of_a_change() {
+    // The prose under the image explains the two code columns and says the
+    // sections are left out when empty. This is the example it describes.
+    let text = detail_screen().text().to_string();
 
-        assert_eq!(
-            committed,
-            screen().to_svg(palette),
-            "{} is stale — the dashboard or the theme changed since it was \
-             generated. Regenerate with `cargo test --test readme_svg -- --ignored`",
-            path.display()
+    for section in ["CHANGES", "COMMITS", "BRANCHES", "STASHES"] {
+        assert!(text.contains(section), "no {section} in:\n{text}");
+    }
+    for row in ["M   src/limits.rs", " M  src/lib.rs", " ?  notes.md"] {
+        assert!(text.contains(row), "missing row:\n{row}\nin:\n{text}");
+    }
+    assert!(text.contains("4 changes · 2 branches · 1 stash"), "{text}");
+}
+
+#[test]
+fn the_picker_lists_the_repos_flush_left() {
+    // What `grit shell rows` emits, and why: fzf reads field one as the alias,
+    // and the table's usual margin would make that field empty.
+    let text = picker_screen().text().to_string();
+    for line in text.lines() {
+        assert!(
+            !line.starts_with("  api") && !line.starts_with("  webapp"),
+            "a repo row is indented, which would cost fzf its first field:\n{line}"
         );
+    }
+    assert!(text.contains("api "), "{text}");
+    assert!(text.contains("ctrl-d: cd"), "{text}");
+}
+
+#[test]
+fn committed_svgs_match_a_fresh_render() {
+    for (name, screen) in examples() {
+        for palette in [&LIGHT, &DARK] {
+            let path = asset(name, palette);
+            let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "{} is missing ({e}); regenerate with \
+                     `cargo test --test readme_svg -- --ignored`",
+                    path.display()
+                )
+            });
+
+            assert_eq!(
+                committed,
+                screen.to_svg(palette),
+                "{} is stale — an example or the theme changed since it was \
+                 generated. Regenerate with `cargo test --test readme_svg -- --ignored`",
+                path.display()
+            );
+        }
     }
 }
 
 #[test]
 #[ignore = "writes into assets/; run with --ignored to regenerate"]
 fn regenerate_the_readme_svgs() {
-    for palette in [&LIGHT, &DARK] {
-        let path = asset(palette);
-        std::fs::write(&path, screen().to_svg(palette))
-            .unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
-        println!("wrote {}", path.display());
+    for (name, screen) in examples() {
+        for palette in [&LIGHT, &DARK] {
+            let path = asset(name, palette);
+            std::fs::write(&path, screen.to_svg(palette))
+                .unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+            println!("wrote {}", path.display());
+        }
     }
 }
