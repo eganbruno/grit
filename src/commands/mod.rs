@@ -12,6 +12,7 @@
 //! what keeps them testable, and what will let a new VCS backend work without
 //! any change here.
 
+pub mod branch;
 pub mod register;
 pub mod run;
 pub mod shell;
@@ -34,6 +35,7 @@ pub fn dispatch(cli: &Cli, ctx: &mut Ctx) -> Result<i32> {
         Some(Command::Remove(args)) => register::remove(args, ctx).map(|_| 0),
         Some(Command::Show(args)) => show::run(args, ctx).map(|_| 0),
         Some(Command::Status(args)) => status::run(args, ctx),
+        Some(Command::Branch(args)) => branch::run(args, ctx),
         Some(Command::Shell(args)) => shell::run(args, ctx),
         Some(Command::External(argv)) => match help_or_version(argv)? {
             Some(code) => Ok(code),

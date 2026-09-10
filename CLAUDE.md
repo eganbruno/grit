@@ -64,6 +64,18 @@ same for the status cache.
   writing a placeholder then `\r`-ing so the child overwrites it strands the
   placeholder's tail on the end of any shorter first line, and garbles when
   stdout is a file.
+- **A listing grit renders itself beats the same listing passed through.**
+  `grit branch` exists because `grit @tag branch -vv` cannot be fixed: the
+  child writes to the terminal on inherited stdio, so grit never sees the text,
+  and both git and dolt print a commit *message* where a table wants a subject.
+  One merge commit with a rationale in its body turns a fifteen-branch listing
+  into pages. Piping the child to trim it is wrong twice over — it costs the
+  pager, the colour and `$EDITOR`, *and* it does not work, because the bodies
+  arrive as extra lines rather than long ones, so cutting each line to width
+  leaves every one of them. The fix for a noisy read-only query is a command
+  that goes through `trait Vcs` and lays the answer out with `Table`, cutting
+  at the point where the data is still structured. `commands/branch.rs` is the
+  worked example.
 - **`git status --porcelain=v2` is the only status format we parse.** v1 and
   the human-readable format are not stable enough to parse.
 - **An error's first line has to carry the cause.** `grit status` renders only
@@ -85,7 +97,15 @@ same for the status cache.
   - **`dolt_log.message` is the whole commit message, not its subject.** git's
     `%s` is the subject alone, so `subject_line` trims dolt's to match. Skip it
     and a commit body goes into the dashboard: its lines push the next repo into
-    the wrong columns, and the preview leaves rows stranded above the prompt
+    the wrong columns, and the preview leaves rows stranded above the prompt.
+    `dolt_branches.latest_commit_message` is the same trap, and `grit branch`
+    goes through the same `subject_line`
+  - **a branch's distance from its upstream costs a query each.** `dolt_log`
+    takes a range as a table function, so counting for every branch of a
+    fifteen-branch database means fifteen round trips. `Tracking::Unmeasured`
+    is what the listing carries instead, and only the checked-out branch is
+    upgraded to `Tracked`. Rendering "unmeasured" as `✓` would be the same
+    class of lie as a stale cache
   - **every number may arrive as a string.** With a `dolt sql-server` running
     against the database, `dolt sql` becomes a MySQL client and the wire
     protocol stringifies everything: `"0"`, not `0` or `false`. Both shapes are
@@ -222,7 +242,7 @@ change what the tests see.
 
 ## Not yet built
 
-Interactive TUI, shell completions, `grit clone`.
+Interactive TUI, shell completions, `grit clone`, `grit log`.
 
 **`PROMPT_COMMAND` is not grit's variable.** `src/shell/grit.bash` hooks it so
 a table that has scrolled into real output stops being ours to erase. Since
