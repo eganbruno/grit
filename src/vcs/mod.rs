@@ -93,6 +93,128 @@ impl RepoState {
     }
 }
 
+/// A deeper reading of one repository, for the detail view.
+///
+/// Separate from [`Snapshot`] because it costs several more invocations of the
+/// backend and is only ever wanted one repository at a time — the one under the
+/// cursor — where the dashboard wants a cheap reading of every repository at
+/// once. Nothing here is cached: it is read on demand and thrown away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Detail {
+    pub snapshot: Snapshot,
+    /// Paths that differ from HEAD; tables, on a backend whose unit is a table.
+    pub files: Vec<FileChange>,
+    /// Most recent first, capped by the backend at [`LOG_LIMIT`].
+    pub commits: Vec<Commit>,
+    pub stashes: Vec<Stash>,
+    pub branches: Vec<Branch>,
+}
+
+/// How many commits a detail reading walks back.
+///
+/// Enough to recognise where you were up to, few enough that the reading stays
+/// one cheap call on a repository with a hundred thousand commits.
+pub const LOG_LIMIT: usize = 10;
+
+/// What happened to one path, on one side of the index.
+///
+/// Deliberately not git's raw `XY` pair: dolt has no index codes at all, and a
+/// backend that had to invent them would be describing itself in another tool's
+/// vocabulary. Each side is simply "nothing" or one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Change {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+    Untracked,
+    Conflicted,
+}
+
+impl Change {
+    /// One character, in git's spelling, for the two-column code the detail
+    /// view prints. Single-width so the column cannot come out ragged.
+    pub const fn code(self) -> char {
+        match self {
+            Change::Added => 'A',
+            Change::Modified => 'M',
+            Change::Deleted => 'D',
+            Change::Renamed => 'R',
+            Change::Copied => 'C',
+            Change::TypeChanged => 'T',
+            Change::Untracked => '?',
+            Change::Conflicted => 'U',
+        }
+    }
+}
+
+/// One path that differs from HEAD.
+///
+/// Both sides can be set at once: a file staged and then modified again is
+/// `staged: Some(Modified), unstaged: Some(Modified)`, which is what git's `MM`
+/// means and what the dashboard counts twice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: String,
+    /// Where a rename or a copy came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// What is staged for commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<Change>,
+    /// What has changed since the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unstaged: Option<Change>,
+}
+
+/// One entry on the stash stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stash {
+    /// `stash@{0}`, as both backends spell it — so it can be pasted straight
+    /// into `grit <alias> stash show <id>`.
+    pub id: String,
+    pub message: String,
+    /// Compacted relative age, in the same spelling as [`Commit::age`].
+    pub age: String,
+}
+
+/// How far a branch stands from its upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Distance {
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+impl Distance {
+    pub fn is_level(self) -> bool {
+        self.ahead == 0 && self.behind == 0
+    }
+}
+
+/// One branch, and how it stands against its upstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Branch {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// How far from the upstream, when that could be measured.
+    ///
+    /// `None` is not `Some(Distance::default())`. A branch whose upstream has
+    /// been deleted, or one on a backend that could not run the count, has no
+    /// distance to report — and rendering that as zero would put a ✓ against
+    /// a branch nobody has compared with anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<Distance>,
+    /// True for the branch that is checked out.
+    pub head: bool,
+    /// The commit at the tip. `None` on a branch with no commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip: Option<Commit>,
+}
+
 pub trait Vcs: Send + Sync {
     fn kind(&self) -> VcsKind;
 
@@ -104,6 +226,14 @@ pub trait Vcs: Send + Sync {
 
     /// Read the repository's current state.
     fn snapshot(&self, path: &Path) -> Result<Snapshot>;
+
+    /// Read the repository in depth: changed paths, recent commits, stashes
+    /// and branches, as well as everything [`Self::snapshot`] reads.
+    ///
+    /// Required rather than defaulted. A default returning an empty [`Detail`]
+    /// would give a new backend a detail view that renders as a repository with
+    /// nothing in it, which reads as a fact rather than as a gap.
+    fn detail(&self, path: &Path) -> Result<Detail>;
 
     /// Run the backend's CLI in `path` with the caller's arguments.
     ///

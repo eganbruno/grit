@@ -24,6 +24,7 @@ pub const RESERVED_ALIASES: &[&str] = &[
     "add",
     "clone",
     "completions",
+    "detail",
     "help",
     "register",
     "remove",

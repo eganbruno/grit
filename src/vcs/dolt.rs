@@ -19,7 +19,10 @@ use serde::{Deserialize, Deserializer};
 
 use crate::error::{Error, Result};
 use crate::registry::VcsKind;
-use crate::vcs::{Commit, RepoState, Snapshot, Vcs};
+use crate::vcs::{
+    Branch, Change, Commit, Detail, Distance, FileChange, LOG_LIMIT, RepoState, Snapshot, Stash,
+    Vcs,
+};
 
 /// Everything the dashboard needs that does not depend on knowing the upstream,
 /// in one round trip.
@@ -47,6 +50,43 @@ select
   (select commit_hash from dolt_log limit 1) as head_id,
   (select message from dolt_log limit 1) as head_subject,
   (select timestampdiff(second, date, utc_timestamp()) from dolt_log limit 1) as head_age";
+
+/// Where each reading lands in the stream of documents [`detail_sql`] returns.
+const DOC_SNAPSHOT: usize = 0;
+const DOC_STATUS: usize = 1;
+const DOC_LOG: usize = 2;
+const DOC_STASHES: usize = 3;
+const DOC_BRANCHES: usize = 4;
+
+/// Everything the detail view reads, as one multi-statement invocation.
+///
+/// One invocation rather than five. `dolt sql` accepts several statements and
+/// answers with one JSON document per statement, back to back — and the spawn
+/// is what costs: four invocations of a trivial query measured 486ms against
+/// 140ms for one carrying all four. This runs while somebody is waiting for a
+/// pane to fill in.
+///
+/// The statement order is the `DOC_*` constants above; adding one means adding
+/// an index, and `a_detail_reading_maps_each_document_to_its_reading` fails if
+/// the two fall out of step.
+fn detail_sql() -> String {
+    [
+        SNAPSHOT_QUERY,
+        "select table_name, staged, status from dolt_status",
+        // `dolt_log`'s first row is HEAD and it walks backwards from there, so
+        // a bare `limit` already means "the most recent N".
+        &format!(
+            "select commit_hash, message,
+               timestampdiff(second, date, utc_timestamp()) as age
+             from dolt_log limit {LOG_LIMIT}"
+        ),
+        "select stash_id, commit_message from dolt_stashes",
+        "select name, remote, branch, hash, latest_commit_message,
+           timestampdiff(second, latest_commit_date, utc_timestamp()) as age
+         from dolt_branches",
+    ]
+    .join(";\n")
+}
 
 /// Dolt commit hashes are 32 characters of base32; git abbreviates to a handful
 /// of hex digits. Trimming to a comparable width keeps the two backends' commit
@@ -105,6 +145,30 @@ impl Vcs for DoltVcs {
         }
 
         Ok(snapshot)
+    }
+
+    fn detail(&self, path: &Path) -> Result<Detail> {
+        if !path.exists() {
+            return Ok(Detail {
+                snapshot: Snapshot {
+                    state: RepoState::Missing,
+                    ..Snapshot::default()
+                },
+                ..Detail::default()
+            });
+        }
+
+        let out = query(path, "detail query", &detail_sql())?;
+        let bad = |source| Error::BadOutput {
+            program: "dolt",
+            source,
+        };
+
+        let docs = split_documents(&out).map_err(bad)?;
+        let mut detail = parse_detail(&docs).map_err(bad)?;
+
+        fill_distances(path, &mut detail);
+        Ok(detail)
     }
 
     fn exec(&self, path: &Path, args: &[OsString]) -> Result<ExitStatus> {
@@ -307,6 +371,293 @@ fn parse_snapshot(json: &str) -> serde_json::Result<Snapshot> {
     })
 }
 
+/// Split the answer to a multi-statement invocation into one document per
+/// statement.
+///
+/// Splitting on newlines would work today and break the first time dolt
+/// pretty-prints a result set; the stream deserialiser reads the values as
+/// values, whatever whitespace is between them.
+fn split_documents(out: &str) -> serde_json::Result<Vec<serde_json::Value>> {
+    serde_json::Deserializer::from_str(out)
+        .into_iter::<serde_json::Value>()
+        .collect()
+}
+
+/// The rows of one document, or none at all when the statement produced no
+/// result set.
+// `Default` comes from `Rows`'s `#[serde(default)]`, which serde's derive
+// turns into a bound on the row type as well as on the vector.
+fn rows_at<T: serde::de::DeserializeOwned + Default>(
+    docs: &[serde_json::Value],
+    index: usize,
+) -> serde_json::Result<Vec<T>> {
+    match docs.get(index) {
+        Some(doc) => Ok(serde_json::from_value::<Rows<T>>(doc.clone())?.rows),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// One row of `dolt_status`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct StatusRow {
+    table_name: String,
+    #[serde(deserialize_with = "wire_bool")]
+    staged: bool,
+    status: String,
+}
+
+/// One row of `dolt_log`, for the commit list rather than for HEAD alone.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LogRow {
+    commit_hash: Option<String>,
+    message: Option<String>,
+    #[serde(deserialize_with = "wire_i64")]
+    age: i64,
+}
+
+/// One row of `dolt_stashes`. There is no timestamp column to read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct StashRow {
+    stash_id: Option<String>,
+    commit_message: Option<String>,
+}
+
+/// One row of `dolt_branches`. `remote` and `branch` name the upstream and are
+/// the empty string — not null, and not absent — when there is not one.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct BranchRow {
+    name: Option<String>,
+    remote: Option<String>,
+    branch: Option<String>,
+    hash: Option<String>,
+    latest_commit_message: Option<String>,
+    #[serde(deserialize_with = "wire_i64")]
+    age: i64,
+}
+
+/// Assemble a [`Detail`] from the documents [`detail_sql`] produced.
+fn parse_detail(docs: &[serde_json::Value]) -> serde_json::Result<Detail> {
+    let snapshot = match docs.get(DOC_SNAPSHOT) {
+        Some(doc) => parse_snapshot(&doc.to_string())?,
+        None => Snapshot::default(),
+    };
+
+    let files = parse_files(rows_at::<StatusRow>(docs, DOC_STATUS)?);
+
+    let commits = rows_at::<LogRow>(docs, DOC_LOG)?
+        .into_iter()
+        .filter_map(|row| {
+            row.commit_hash.map(|id| Commit {
+                short_id: id.chars().take(SHORT_ID_LEN).collect(),
+                subject: subject_line(row.message.as_deref().unwrap_or_default()).to_string(),
+                age: compact_age(row.age),
+            })
+        })
+        .collect();
+
+    let stashes = rows_at::<StashRow>(docs, DOC_STASHES)?
+        .into_iter()
+        .map(|row| Stash {
+            id: row.stash_id.unwrap_or_default(),
+            message: subject_line(row.commit_message.as_deref().unwrap_or_default()).to_string(),
+            // `dolt_stashes` carries no timestamp. Left empty rather than
+            // filled with the stashed commit's age, which is the age of the
+            // work and not of the stash — a plausible number in the wrong
+            // column is worse than a blank one.
+            age: String::new(),
+        })
+        .collect();
+
+    let current = snapshot.branch.clone().unwrap_or_default();
+    let branches = rows_at::<BranchRow>(docs, DOC_BRANCHES)?
+        .into_iter()
+        .filter_map(|row| {
+            let name = row.name?;
+            let upstream = match (row.remote.as_deref(), row.branch.as_deref()) {
+                (Some(remote), Some(branch)) if !remote.is_empty() && !branch.is_empty() => {
+                    Some(format!("{remote}/{branch}"))
+                }
+                _ => None,
+            };
+            Some(Branch {
+                head: name == current,
+                name,
+                upstream,
+                // Filled in by `fill_distances`, which needs a range query
+                // per branch — not something `dolt_branches` can answer on
+                // its own. Until then it is unmeasured, and that is a
+                // different claim from being level.
+                distance: None,
+                tip: row.hash.map(|id| Commit {
+                    short_id: id.chars().take(SHORT_ID_LEN).collect(),
+                    subject: subject_line(row.latest_commit_message.as_deref().unwrap_or_default())
+                        .to_string(),
+                    age: compact_age(row.age),
+                }),
+            })
+        })
+        .collect();
+
+    Ok(Detail {
+        snapshot,
+        files,
+        commits,
+        stashes,
+        branches,
+    })
+}
+
+/// Fold `dolt_status`'s rows into one entry per table.
+///
+/// Dolt lists the staged and the unstaged side of a table as two rows where
+/// git puts both on one line, and the detail view shows one row per path
+/// either way.
+fn parse_files(rows: Vec<StatusRow>) -> Vec<FileChange> {
+    let mut files: Vec<FileChange> = Vec::new();
+
+    for row in rows {
+        let change = status_change(&row.status, row.staged);
+        let (path, origin) = split_rename(&row.table_name);
+
+        let index = match files.iter().position(|file| file.path == path) {
+            Some(index) => index,
+            None => {
+                files.push(FileChange {
+                    path,
+                    origin: None,
+                    staged: None,
+                    unstaged: None,
+                });
+                files.len() - 1
+            }
+        };
+
+        let file = &mut files[index];
+        if row.staged {
+            file.staged = Some(change);
+        } else {
+            file.unstaged = Some(change);
+        }
+        if origin.is_some() {
+            file.origin = origin;
+        }
+    }
+
+    files
+}
+
+/// Read one `dolt_status.status` value as a [`Change`].
+///
+/// The same word means different things on the two sides: an unstaged `new
+/// table` is a table dolt has never been told about, which is what git calls
+/// untracked. [`SNAPSHOT_QUERY`] counts it that way too, and the two have to
+/// agree or the detail view contradicts the header above it.
+fn status_change(status: &str, staged: bool) -> Change {
+    match status {
+        "new table" if !staged => Change::Untracked,
+        "new table" => Change::Added,
+        "deleted" => Change::Deleted,
+        "renamed" => Change::Renamed,
+        "conflict" => Change::Conflicted,
+        // `modified`, and whatever a later dolt adds.
+        _ => Change::Modified,
+    }
+}
+
+/// Dolt spells a rename by putting both names in the one column:
+/// `sprockets -> widgets2`.
+fn split_rename(table: &str) -> (String, Option<String>) {
+    match table.split_once(" -> ") {
+        Some((from, to)) => (to.to_string(), Some(from.to_string())),
+        None => (table.to_string(), None),
+    }
+}
+
+/// Count each branch against its upstream.
+///
+/// A second round trip for the same reason [`DoltVcs::snapshot`] needs one:
+/// `dolt_log`'s range argument has to name the upstream, and the query that
+/// names it is the one that just returned.
+///
+/// Batched first, then one at a time if that fails. The batch is what makes
+/// this a single spawn in the ordinary case, but `dolt sql` stops at the first
+/// statement that errors and exits non-zero, and an upstream that has never
+/// been fetched is exactly such an error — so one unfetched branch would
+/// otherwise cost every other branch its reading too. A branch that cannot be
+/// counted keeps `distance: None`, which renders as nothing rather than as a
+/// tick.
+fn fill_distances(path: &Path, detail: &mut Detail) {
+    let queries: Vec<(usize, String)> = detail
+        .branches
+        .iter()
+        .enumerate()
+        .filter_map(|(index, branch)| {
+            let upstream = branch.upstream.as_deref()?;
+            Some((index, ahead_behind_query(&branch.name, upstream)))
+        })
+        .collect();
+
+    if queries.is_empty() {
+        return;
+    }
+
+    let batched = queries
+        .iter()
+        .map(|(_, sql)| sql.as_str())
+        .collect::<Vec<_>>()
+        .join(";\n");
+
+    let measured: Vec<Option<Distance>> = match run_distances(path, &batched) {
+        // One document per statement, in order.
+        Some(docs) if docs.len() == queries.len() => docs,
+        // Short or missing: fall back to asking for them one by one, so the
+        // branches that *can* be counted still are.
+        _ => queries
+            .iter()
+            .map(|(_, sql)| run_distances(path, sql).and_then(|d| d.into_iter().next().flatten()))
+            .collect(),
+    };
+
+    for ((index, _), distance) in queries.iter().zip(measured) {
+        let Some(distance) = distance else {
+            continue;
+        };
+
+        let branch = &mut detail.branches[*index];
+        branch.distance = Some(distance);
+
+        // The checked-out branch is the one the header reads from, and
+        // `parse_snapshot` left its counts at zero for this to fill in.
+        if branch.head {
+            detail.snapshot.ahead = distance.ahead;
+            detail.snapshot.behind = distance.behind;
+        }
+    }
+}
+
+/// Run one or more ahead/behind statements, one [`Distance`] per document.
+///
+/// `None` for the whole call when the invocation failed; `None` for an
+/// individual document when it could not be read as a pair of counts.
+fn run_distances(path: &Path, sql: &str) -> Option<Vec<Option<Distance>>> {
+    let out = query(path, "ahead/behind query", sql).ok()?;
+    let docs = split_documents(&out).ok()?;
+
+    Some(
+        docs.iter()
+            .map(|doc| {
+                parse_ahead_behind(&doc.to_string())
+                    .ok()
+                    .map(|(ahead, behind)| Distance { ahead, behind })
+            })
+            .collect(),
+    )
+}
+
 /// The subject of a commit message: its first line.
 ///
 /// `dolt_log.message` is the *whole* message where git's `%s` is the subject
@@ -420,6 +771,176 @@ mod tests {
 
     /// Stopped in the middle of a merge with one table unresolved.
     const CONFLICTED: &str = r#"{"rows": [{"branch":"main","conflicts":1,"head_age":207,"head_id":"llv5ak83i3c2ah4ce8gid07l8tgshbc9","head_subject":"main sets 2","merging":true,"staged":0,"stashes":0,"unstaged":0,"untracked":0}]}"#;
+
+    /// `dolt_status` in every shape it produces, captured verbatim. Note that
+    /// one table appears twice — staged as a new table, unstaged as deleted —
+    /// and that a rename puts both names in the one column.
+    const STATUS: &str = r#"{"rows": [{"staged":1,"status":"new table","table_name":"gadgets"},{"staged":1,"status":"new table","table_name":"sprockets"},{"staged":0,"status":"deleted","table_name":"gadgets"},{"staged":0,"status":"renamed","table_name":"sprockets -> widgets2"},{"staged":0,"status":"modified","table_name":"widgets"}]}"#;
+
+    const STASHES: &str = r#"{"rows": [{"branch":"main","commit_message":"second commit with a much longer subject line\nand a body paragraph that must never reach a table cell","hash":"eiejsd2eb9mbt2lo1ulqncqir4ivjuok","name":"dolt-cli","stash_id":"stash@{0}"}]}"#;
+
+    const BRANCHES: &str = r#"{"rows": [{"age":69,"branch":"","dirty":false,"hash":"eiejsd2eb9mbt2lo1ulqncqir4ivjuok","latest_commit_message":"second commit\nwith a body","name":"feature/thing","remote":""},{"age":69,"branch":"main","dirty":true,"hash":"eiejsd2eb9mbt2lo1ulqncqir4ivjuok","latest_commit_message":"second commit\nwith a body","name":"main","remote":"origin"}]}"#;
+
+    const DETAIL_LOG: &str = r#"{"rows": [{"age":0,"commit_hash":"eiejsd2eb9mbt2lo1ulqncqir4ivjuok","committer":"T","message":"second commit with a much longer subject line\nand a body paragraph that must never reach a table cell"},{"age":1,"commit_hash":"2q5i8s10o2a12dg0t3gb940pck9om0ik","committer":"T","message":"Initialize data repository"}]}"#;
+
+    /// An empty result set. Dolt drops the `rows` key altogether rather than
+    /// writing an empty array, which is what `Rows`'s default is for.
+    const EMPTY: &str = "{}";
+
+    fn detail_of(status: &str, log: &str, stashes: &str, branches: &str) -> Detail {
+        let joined = format!("{FRESH}\n{status}\n{log}\n{stashes}\n{branches}");
+        parse_detail(&split_documents(&joined).expect("fixtures are valid json"))
+            .expect("fixtures deserialise")
+    }
+
+    #[test]
+    fn a_multi_statement_answer_splits_into_one_document_per_statement() {
+        let joined = format!("{FRESH}\n{STATUS}\n{EMPTY}");
+        assert_eq!(split_documents(&joined).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_detail_reading_maps_each_document_to_its_reading() {
+        let detail = detail_of(STATUS, DETAIL_LOG, STASHES, BRANCHES);
+        assert_eq!(detail.snapshot.branch.as_deref(), Some("main"));
+        assert_eq!(detail.files.len(), 4);
+        assert_eq!(detail.commits.len(), 2);
+        assert_eq!(detail.stashes.len(), 1);
+        assert_eq!(detail.branches.len(), 2);
+    }
+
+    #[test]
+    fn the_two_sides_of_one_table_fold_into_one_row() {
+        // `gadgets` is staged as a new table and deleted in the working set;
+        // git puts both on one line and so does the detail view.
+        let detail = detail_of(STATUS, EMPTY, EMPTY, EMPTY);
+        let gadgets = detail
+            .files
+            .iter()
+            .find(|f| f.path == "gadgets")
+            .expect("gadgets is in the fixture");
+        assert_eq!(gadgets.staged, Some(Change::Added));
+        assert_eq!(gadgets.unstaged, Some(Change::Deleted));
+    }
+
+    #[test]
+    fn a_rename_is_split_out_of_the_one_column_dolt_puts_it_in() {
+        let detail = detail_of(STATUS, EMPTY, EMPTY, EMPTY);
+        let renamed = detail
+            .files
+            .iter()
+            .find(|f| f.path == "widgets2")
+            .expect("the rename is in the fixture");
+        assert_eq!(renamed.origin.as_deref(), Some("sprockets"));
+        assert_eq!(renamed.unstaged, Some(Change::Renamed));
+    }
+
+    #[test]
+    fn an_unstaged_new_table_is_untracked_and_a_staged_one_is_added() {
+        // The same word on the two sides means different things, and
+        // SNAPSHOT_QUERY counts them the same way this reads them.
+        assert_eq!(status_change("new table", false), Change::Untracked);
+        assert_eq!(status_change("new table", true), Change::Added);
+    }
+
+    #[test]
+    fn a_status_word_this_build_does_not_know_is_read_as_a_modification() {
+        assert_eq!(status_change("something new", false), Change::Modified);
+    }
+
+    #[test]
+    fn a_table_name_with_no_arrow_in_it_is_not_a_rename() {
+        assert_eq!(split_rename("widgets"), ("widgets".to_string(), None));
+    }
+
+    #[test]
+    fn a_commit_body_never_reaches_the_detail_view_either() {
+        // The same trap `subject_line` exists for, one layer out: dolt's
+        // message column is the whole message in the log, in the stash list
+        // and in the branch list alike.
+        let detail = detail_of(EMPTY, DETAIL_LOG, STASHES, BRANCHES);
+        for subject in [
+            detail.commits[0].subject.as_str(),
+            detail.stashes[0].message.as_str(),
+            detail.branches[0].tip.as_ref().unwrap().subject.as_str(),
+        ] {
+            assert!(
+                !subject.contains('\n'),
+                "a body reached a cell: {subject:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_commit_hash_is_abbreviated_the_way_the_dashboard_abbreviates_it() {
+        let detail = detail_of(EMPTY, DETAIL_LOG, EMPTY, EMPTY);
+        assert_eq!(detail.commits[0].short_id, "eiejsd2e");
+        assert_eq!(detail.commits[0].short_id.len(), SHORT_ID_LEN);
+    }
+
+    #[test]
+    fn a_stash_has_no_age_because_dolt_records_none() {
+        let detail = detail_of(EMPTY, EMPTY, STASHES, EMPTY);
+        assert_eq!(detail.stashes[0].id, "stash@{0}");
+        assert!(detail.stashes[0].age.is_empty());
+    }
+
+    #[test]
+    fn a_branch_upstream_is_joined_only_when_both_halves_are_there() {
+        let detail = detail_of(EMPTY, EMPTY, EMPTY, BRANCHES);
+        assert_eq!(detail.branches[0].upstream, None);
+        assert_eq!(detail.branches[1].upstream.as_deref(), Some("origin/main"));
+    }
+
+    #[test]
+    fn a_branch_starts_out_unmeasured_rather_than_level() {
+        // `fill_distances` needs a second round trip to count these, and it
+        // may not get one. Zero here would put a ✓ against every branch in a
+        // repo whose upstreams have never been fetched.
+        let detail = detail_of(EMPTY, EMPTY, EMPTY, BRANCHES);
+        assert!(detail.branches.iter().all(|b| b.distance.is_none()));
+    }
+
+    #[test]
+    fn the_checked_out_branch_is_the_one_the_snapshot_names() {
+        let detail = detail_of(EMPTY, EMPTY, EMPTY, BRANCHES);
+        assert!(!detail.branches[0].head, "feature/thing is not checked out");
+        assert!(detail.branches[1].head, "main is");
+    }
+
+    #[test]
+    fn an_empty_result_set_reads_as_nothing_rather_than_failing() {
+        let detail = detail_of(EMPTY, EMPTY, EMPTY, EMPTY);
+        assert!(detail.files.is_empty());
+        assert!(detail.commits.is_empty());
+        assert!(detail.stashes.is_empty());
+        assert!(detail.branches.is_empty());
+    }
+
+    #[test]
+    fn a_detail_reading_survives_a_server_stringifying_everything() {
+        // The same trap as the snapshot's: with a `dolt sql-server` holding
+        // the database, `staged` arrives as "1" and `age` as "69".
+        let wired = STATUS.replace(r#""staged":1"#, r#""staged":"1""#);
+        let detail = detail_of(&wired, EMPTY, EMPTY, EMPTY);
+        assert_eq!(
+            detail
+                .files
+                .iter()
+                .find(|f| f.path == "sprockets")
+                .and_then(|f| f.staged),
+            Some(Change::Added)
+        );
+    }
+
+    #[test]
+    fn the_detail_query_carries_one_statement_per_document_index() {
+        // The `DOC_*` constants are positions in a list built somewhere else,
+        // and nothing but this ties the two together.
+        let sql = detail_sql();
+        assert_eq!(sql.matches(";\n").count() + 1, DOC_BRANCHES + 1);
+        assert!(sql.contains(&format!("limit {LOG_LIMIT}")));
+    }
 
     #[test]
     fn a_fresh_repo_is_clean_and_synced() {

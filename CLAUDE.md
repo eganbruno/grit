@@ -65,7 +65,17 @@ same for the status cache.
   placeholder's tail on the end of any shorter first line, and garbles when
   stdout is a file.
 - **`git status --porcelain=v2` is the only status format we parse.** v1 and
-  the human-readable format are not stable enough to parse.
+  the human-readable format are not stable enough to parse. Two things about
+  reading the *entries* rather than counting them, which `grit detail` does:
+  the invocation carries `-c core.quotePath=false`, because git's default
+  C-quotes any non-ASCII path and the list would show the characters
+  `"caf\303\251.txt"`; and a rename entry (`2 R.`) separates the new path from
+  the old with a **tab**, not a space. `parse_status` returns counts and files
+  from one walk so the header and the list cannot disagree.
+- **`grit detail` takes a live reading; it never touches the cache.** The cache
+  exists so a dashboard of twenty repos can appear instantly. This is one repo,
+  asked for by name, and a card drawn from a stale cache would say "clean"
+  about a repo you had just edited.
 - **An error's first line has to carry the cause.** `grit status` renders only
   that line, so anything a backend failure needs to say belongs there — put a
   newline or a pasted SQL query in front of it and the row says nothing.
@@ -220,9 +230,69 @@ habit of omitting null columns from the output altogether; keep them that way. `
 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` so the developer's own gitconfig cannot
 change what the tests see.
 
+## The repo picker
+
+`^G^G` opens fzf over `grit shell rows`, with `grit detail {1}` as the preview
+command. grit spawns nothing: the fzf invocation lives in the shell scripts, so
+`commands/` stays out of the process business, and the widget runs in the
+user's own shell — which is the only reason its `ctrl-d` binding can change
+that shell's directory.
+
+- **`^G` is a bare prefix, bound to nothing.** The picker is `^G^G`, the
+  inline preview `^G^P`. Every line editor resolves an ambiguous prefix by
+  waiting for the next key, and charges that wait to the *shorter* binding:
+  measured at 404ms (zsh 5.9, `KEYTIMEOUT`) and 504ms (readline,
+  `keyseq-timeout`) on every press of it. So nothing sits on `^G` alone.
+- **Not every key can be the tail of a chord.** `^G^D` is the obvious mnemonic
+  for a dashboard and is unusable: on an empty command line the `^D` is read
+  as end-of-input, so it never fires the widget and closes the shell instead.
+  Measured in zsh and bash both. `^P ^A ^V ^K ^N ^Y ^G` are all fine, and
+  `^W ^U ^V ^O ^S ^Q ^Z` never reach a line editor at all.
+  `tests/shell/preview.py` presses each chord on an empty line for this.
+- **The letters avoid fzf-git.sh's `^G^{f,b,t,r,h,s,l,e,w}`.** It is widely
+  installed, it claims `^G` as a prefix too, and it binds both `^Gx` and
+  `^G^x` for each. An earlier default of `^G^R` went straight into its
+  `Remotes` picker on the first machine it met. `tests/shell/preview.py`
+  asserts the whole family stays clear.
+- **grit binds what it is asked for and does not rearrange it.** An earlier
+  version moved a binding out of the way when it was a prefix of the other.
+  That was one more rule to explain, and it became wrong as soon as there were
+  three chords: doubling `^G` lands on `^G^G`, which is the picker. Setting
+  `GRIT_PREVIEW_KEY='^G'` now does exactly that, pause and all.
+- **Nothing in the scripts may be `typeset -r`.** A read-only constant makes
+  the *second* sourcing of the script a fatal error at that line, so the eval
+  aborts and every widget, hook and binding below it is silently never
+  installed — the shell looks like it loaded and does nothing. Re-sourcing is
+  what anyone does to pick up a new grit without a new terminal.
+  `tests/shell/preview.py` sources twice and then checks a binding from the
+  bottom of the file.
+- **`grit shell rows` prints flush left.** fzf splits a row into fields the way
+  awk does but counts a leading run of spaces as field one, so with the table's
+  usual two-space margin `{1}` comes back empty and every preview is of
+  nothing. `Table::no_indent` exists for that, and `no_header` for the same
+  family of reason — a header row handed to a picker is a row you can select.
+- **A hidden header reserves no width.** `no_header` had to stop the header
+  text feeding `natural_widths`, or `CODE` above a two-character code holds the
+  column four wide and pushes the path column out.
+- **A distance nobody measured is `None`, never zero.** `Branch::distance` is
+  an `Option` because `(0, 0)` renders as `✓ in sync`, and there are two ways
+  to have no number that are not that: git still names the upstream of a
+  branch whose upstream ref has been *deleted* (`%(upstream:track)` is
+  `[gone]`), and dolt's per-branch counts come from a second invocation that
+  can fail outright. Both used to paint a tick. `dolt sql` also stops at the
+  first statement that errors and exits non-zero, so one never-fetched
+  upstream took every other branch's count down with it — hence the
+  batch-then-one-at-a-time fallback in `fill_distances`.
+- **`grit shell path` exists so the shell does not parse JSON.** `show --json`
+  carries the same fact, but reading it from a key binding meant either a jq
+  dependency or a grep-and-sed that is wrong on a path with a quote in it.
+
 ## Not yet built
 
-Interactive TUI, shell completions, `grit clone`.
+Interactive TUI (the picker is fzf, not a TUI grit draws), shell completions,
+`grit clone`. For dolt, per-branch ahead/behind costs one query per branch —
+batched into a single invocation, but still a second round trip — and
+`dolt_stashes` records no timestamp at all, so a stash there has no age.
 
 **`PROMPT_COMMAND` is not grit's variable.** `src/shell/grit.bash` hooks it so
 a table that has scrolled into real output stops being ours to erase. Since

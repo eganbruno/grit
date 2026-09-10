@@ -268,7 +268,7 @@ fn branch_cell(snap: &Snapshot) -> Cell {
 
 /// `✓` in sync, `↑n` / `↓n` otherwise, `·` when there is no upstream to compare
 /// against — the three cases are genuinely different and worth distinguishing.
-fn sync_cell(snap: &Snapshot) -> Cell {
+pub(crate) fn sync_cell(snap: &Snapshot) -> Cell {
     if snap.upstream.is_none() {
         return Cell::styled(symbol::NONE, Theme::muted());
     }
@@ -289,7 +289,7 @@ fn sync_cell(snap: &Snapshot) -> Cell {
     cell
 }
 
-fn state_cell(snap: &Snapshot) -> Cell {
+pub(crate) fn state_cell(snap: &Snapshot) -> Cell {
     let mut cell = Cell::empty();
 
     if let Some(label) = snap.state.label() {

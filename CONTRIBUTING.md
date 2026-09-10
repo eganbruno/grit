@@ -48,7 +48,10 @@ Two rules keep this honest:
   what lets a new VCS backend work without touching any command.
 - **Parsers are pure functions.** `vcs/git.rs` separates "run the command" from
   "parse its output" so the parsing — where the bugs are — is tested against
-  fixture strings, with no repository on disk.
+  fixture strings, with no repository on disk. One parser per format, not per
+  caller: `parse_status` yields the dashboard's counts and the detail view's
+  file list from a single walk, because the porcelain v2 entry grammar is
+  fiddly enough that a second copy of it would drift from the first.
 
 ## The README's dashboard
 
@@ -203,8 +206,15 @@ Two exist: `vcs/git.rs` and `vcs/dolt.rs`. Say you want `jj`.
 
 1. Add the variant to `VcsKind` in `src/registry/model.rs`, and its `as_str()`
    arm.
-2. Add `src/vcs/jj.rs` implementing `Vcs` — four methods: `kind`, `discover`,
-   `snapshot`, `exec`.
+2. Add `src/vcs/jj.rs` implementing `Vcs` — five methods: `kind`, `discover`,
+   `snapshot`, `detail`, `exec`. `detail` is the deeper reading `grit detail`
+   and the repo picker render: changed paths, recent commits, stashes and
+   branches. It is required rather than defaulted, because a default returning
+   an empty `Detail` would give the new backend a card that renders as a
+   repository with nothing in it — which reads as a fact rather than as a gap.
+   Where the backend genuinely cannot answer a part of it, leave that part
+   empty and say why in a comment, the way `vcs/dolt.rs` does for a stash's
+   age.
 3. List it in `provider_for` and `all_providers` in `src/vcs/mod.rs`.
    `all_providers` is the order registration tries when detecting what a path
    is, so put the more specific backend first: dolt precedes git so that a

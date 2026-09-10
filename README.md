@@ -128,6 +128,7 @@ running anything — see
 | `grit rm <alias>...` | Forget an alias. The repository itself is untouched. Long form: `grit remove`. |
 | `grit show` | Every registered repo: alias, kind, tags, path. |
 | `grit status [alias...]` | Branch, sync state and working-tree state for each repo. |
+| `grit detail <alias>` | One repo in depth: changed paths, recent commits, branches, stashes. |
 | `grit <alias> <args...>` | Run the repo's own VCS there, with those arguments. |
 | `grit @<tag> <args...>` | Run it in every repo carrying that tag. |
 | `grit shell enable [shell]` | Add the integration to your shell's startup file. |
@@ -150,10 +151,53 @@ ships with the binary instead of drifting from it here:
 grit --help                 # the map, and every environment variable
 grit status --help          # each flag, and how to read the table
 grit register --help        # paths, tags, moving an alias somewhere new
+grit detail --help          # what each section shows, and its JSON
 grit show --help            # reading the JSON from a script
 grit shell enable --help    # which file, and the block it writes
 grit help shell enable      # the same thing, spelled the other way
 ```
+
+### One repo, in depth
+
+`grit status` gives every repo a row. `grit detail <alias>` gives one repo a
+card: the same header, then a section each for the changed paths, the last few
+commits, the branches and the stash stack. Sections with nothing in them are
+left out rather than headed and empty.
+
+```
+$ grit detail api
+  api  ~/code/api
+  git · release
+
+  feature/rate-limits  →  origin/feature/rate-limits  ↑2  ●2 ○1 ?1
+
+  CHANGES
+  M   src/limits.rs
+   M  src/lib.rs
+  A   src/headers.rs
+   ?  notes.md
+
+  COMMITS
+  15beeba  add rate limit headers                   20m
+  8c31f0d  pull the window size out of the config    2h
+
+  BRANCHES
+  *  feature/rate-limits  origin/feature/rate-limits  ↑2  add rate limit headers  20m
+     main                 origin/main                 ✓   bump chart library      2d
+
+  4 changes · 2 branches
+```
+
+The two columns on the left of `CHANGES` are the staged side and the unstaged
+side, in git's letters: `M` modified, `A` added, `D` deleted, `R` renamed,
+`?` untracked, `U` conflicted. A file staged and then edited again shows `MM`.
+
+In `BRANCHES`, a blank sync column means nothing was compared — the branch has
+no upstream, or it has one that has since been deleted. That is deliberately
+not `✓`, which claims the two are level.
+
+Unlike the dashboard this takes a fresh reading every time — it is one repo,
+asked for by name, and the cache exists for the case that is neither.
 
 ### Reading the dashboard
 
@@ -269,6 +313,40 @@ If you would rather add the line yourself, that is all the block contains:
 ```bash
 eval "$(grit shell init zsh)"
 ```
+
+#### Browsing them: `^G^G`
+
+`^G^G` opens a picker over every registered repo, with `grit detail` rendered
+beside it as you move:
+
+```
+> api                                                 api  ~/code/api
+  api     feature/rate-limits  ↑2  ●3 ○1              git · release
+  docs    main                 ✓   clean
+  webapp  main                 ·   ○2 ?1 ⚑1           feature/rate-limits → origin/…  ↑2
+  4/4                                                 CHANGES
+  enter: run git here · ctrl-d: cd · ctrl-r: refresh   M   src/limits.rs
+                                                       ?  notes.md
+```
+
+`enter` puts `grit <alias> ` on the command line for you to finish — which
+command you wanted is the part grit cannot guess. `ctrl-d` cds there instead,
+and `ctrl-r` takes a fresh reading.
+
+This one needs [fzf](https://github.com/junegunn/fzf) on your `PATH`; without
+it the key says so and does nothing else. grit supplies the two halves — the
+rows, and the pane — and fzf does the navigating.
+
+**`^G` is a prefix now, so the inline table above is on `^G^P`.** Nothing is
+bound to `^G` alone: a line editor waits for the second key before it will
+admit none is coming — 404ms in zsh, 504ms in readline — and charges that to
+the shorter binding, every press. The letters also keep clear of
+[fzf-git.sh](https://github.com/junegunn/fzf-git.sh)'s
+`^G^{f,b,t,r,h,s,l,e,w}`, since that tool is common and claims `^G` as well.
+
+`GRIT_PREVIEW_KEY='^G'` before the eval gets the old single key back if you
+want it; it will just pause. grit binds what you ask for and does not
+rearrange it.
 
 It is the same table `grit status` prints, drawn from a cache so it costs
 nothing to show, with a note in the footer saying how old the reading is. A

@@ -17,7 +17,10 @@
 
 use anyhow::Result;
 
-use crate::cli::{ShellArgs, ShellCommand, ShellPreviewArgs, ShellRefreshArgs, ShellSetupArgs};
+use crate::cli::{
+    ShellArgs, ShellCommand, ShellPathArgs, ShellPreviewArgs, ShellRefreshArgs, ShellRowsArgs,
+    ShellSetupArgs,
+};
 use crate::context::Ctx;
 use crate::render::{Theme, footer, paint, zsh_style};
 use crate::shell::{self, Change, Shell};
@@ -34,6 +37,8 @@ pub fn run(args: &ShellArgs, ctx: &mut Ctx) -> Result<i32> {
         ShellCommand::Disable(setup) => disable(setup, ctx),
         ShellCommand::Preview(preview_args) => preview(preview_args, ctx),
         ShellCommand::Refresh(refresh_args) => refresh(refresh_args, ctx),
+        ShellCommand::Rows(rows_args) => rows(rows_args, ctx),
+        ShellCommand::Path(path_args) => path(path_args, ctx),
     }
 }
 
@@ -197,6 +202,68 @@ fn preview(args: &ShellPreviewArgs, ctx: &mut Ctx) -> Result<i32> {
     }
     print!("{text}");
 
+    Ok(0)
+}
+
+/// Where an alias points, unadorned, for a shell to `cd` into.
+///
+/// `grit show --json` already carries this, but reading it from a key binding
+/// means a JSON parser in the shell — and the two answers that were tried,
+/// grep-and-sed and a jq dependency, are respectively wrong on a path with a
+/// quote in it and not installed.
+///
+/// The path is printed raw: not abbreviated to `~`, which is for reading, and
+/// with no trailing newline of consequence, so `cd -- "$(grit shell path api)"`
+/// is the whole of the caller's side.
+fn path(args: &ShellPathArgs, ctx: &mut Ctx) -> Result<i32> {
+    let repo = ctx.registry.get(&args.alias)?;
+    println!("{}", repo.path().display());
+    Ok(0)
+}
+
+/// The dashboard's rows alone, one repo per line.
+///
+/// What the picker reads on stdin. No header, no rule and no footer, because
+/// every line a picker is given is a line it will let you select — and no
+/// margin, because the alias has to be the row's first field for a preview
+/// command to name the repo with `{1}`.
+///
+/// Painted with ANSI rather than handed over as text plus ranges: the picker
+/// is a separate program drawing on the terminal itself, not the line editor
+/// holding a string, so this is the one place where escapes are what is
+/// wanted. `--color` still decides, so a pipe into a file is plain.
+fn rows(args: &ShellRowsArgs, ctx: &mut Ctx) -> Result<i32> {
+    let repos = ctx.registry.all();
+    if repos.is_empty() {
+        return Ok(0);
+    }
+
+    // The cache is what makes the picker open instantly; falling back to a
+    // live reading when there is not one — and leaving it behind for next
+    // time — is what stops the very first press showing an empty list.
+    let cached = args
+        .cached
+        .then(|| status::read_cache(ctx))
+        .flatten()
+        .map(|cache| status::select_cached(&cache, &repos));
+
+    let rows = match cached {
+        Some(rows) => rows,
+        None => {
+            let rows = status::collect(repos);
+            let _ = status::try_write_cache(ctx, &rows);
+            rows
+        }
+    };
+
+    print!(
+        "{}",
+        status::build_table(&rows, ctx)
+            .no_header()
+            .no_rule()
+            .no_indent()
+            .render()
+    );
     Ok(0)
 }
 

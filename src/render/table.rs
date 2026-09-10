@@ -115,6 +115,12 @@ impl Cell {
         self.spans.iter().map(|s| s.text.width()).sum()
     }
 
+    /// The styled pieces, for a caller painting one line with no columns to
+    /// align it against. [`Table`] is the right answer whenever there are.
+    pub fn spans(&self) -> &[Span] {
+        &self.spans
+    }
+
     /// The unstyled text, for tests and `--json`-adjacent uses.
     pub fn text(&self) -> String {
         self.spans.iter().map(|s| s.text.as_str()).collect()
@@ -196,6 +202,8 @@ pub struct Table {
     /// Available terminal width, if known.
     width: Option<usize>,
     rule: bool,
+    header: bool,
+    indent: bool,
 }
 
 impl Table {
@@ -214,6 +222,8 @@ impl Table {
             color: false,
             width: None,
             rule: true,
+            header: true,
+            indent: true,
         }
     }
 
@@ -249,6 +259,30 @@ impl Table {
         self
     }
 
+    /// Lay the table out without printing its column headers.
+    ///
+    /// For a view made of several short tables stacked under their own titles,
+    /// where a header row above each one is noise rather than a label. The
+    /// headers still name the columns in the source, but a header nobody sees
+    /// no longer sets a minimum width — `CODE` over a two-character code would
+    /// otherwise hold the column four columns wide.
+    pub fn no_header(mut self) -> Self {
+        self.header = false;
+        self
+    }
+
+    /// Lay the table out flush left, without the margin.
+    ///
+    /// The margin keeps printed output off the terminal edge. Inside a picker
+    /// there is no edge to keep off — the picker draws its own gutter — and the
+    /// indent costs the first column its place: fzf splits a row into fields
+    /// the way awk does but counts a leading run of spaces as field one, so
+    /// `{1}` comes back empty rather than as the alias.
+    pub fn no_indent(mut self) -> Self {
+        self.indent = false;
+        self
+    }
+
     pub fn push_row(&mut self, cells: Vec<Cell>) {
         debug_assert_eq!(
             cells.len(),
@@ -261,6 +295,11 @@ impl Table {
     }
 
     /// Natural width of each column: the widest of its header and its cells.
+    /// The left margin, which [`Table::no_indent`] takes away.
+    fn margin(&self) -> &'static str {
+        if self.indent { INDENT } else { "" }
+    }
+
     fn natural_widths(&self) -> Vec<usize> {
         self.columns
             .iter()
@@ -273,7 +312,15 @@ impl Table {
                     .map(Cell::width)
                     .max()
                     .unwrap_or(0);
-                cells.max(col.header.width())
+                // A header that is not being printed reserves nothing. It
+                // still names the column in the source, and for a card made of
+                // short tables it is usually the widest thing in it — `CODE`
+                // over a two-character code pushed the path column four spaces
+                // right of where it belonged.
+                match self.header {
+                    true => cells.max(col.header.width()),
+                    false => cells,
+                }
             })
             .collect()
     }
@@ -290,7 +337,7 @@ impl Table {
 
         let total: usize = widths.iter().sum::<usize>()
             + GAP * self.columns.len().saturating_sub(1)
-            + INDENT.width();
+            + self.margin().width();
 
         if total <= available {
             return widths;
@@ -377,17 +424,19 @@ impl Table {
         let mut out = Vec::new();
 
         // Header row, in the same column geometry as the body.
-        let header_cells: Vec<Cell> = self
-            .columns
-            .iter()
-            .map(|c| Cell::styled(c.header.to_uppercase(), Theme::header()))
-            .collect();
-        out.push(self.line_spans(&header_cells, &widths, &cap));
+        if self.header {
+            let header_cells: Vec<Cell> = self
+                .columns
+                .iter()
+                .map(|c| Cell::styled(c.header.to_uppercase(), Theme::header()))
+                .collect();
+            out.push(self.line_spans(&header_cells, &widths, &cap));
+        }
 
         if self.rule {
             let span: usize = widths.iter().sum::<usize>() + GAP * widths.len().saturating_sub(1);
             out.push(vec![
-                unstyled(INDENT),
+                unstyled(self.margin()),
                 Span {
                     text: symbol::RULE.repeat(span),
                     style: Theme::rule(),
@@ -408,7 +457,7 @@ impl Table {
         widths: &[usize],
         cap: &impl Fn(usize) -> Option<usize>,
     ) -> Vec<Span> {
-        let mut line = vec![unstyled(INDENT)];
+        let mut line = vec![unstyled(self.margin())];
 
         for (i, col) in self.columns.iter().enumerate() {
             let empty = Cell::empty();

@@ -462,9 +462,14 @@ def zsh_staleness_suite(grit, report):
     fx.clean()
 
 
-def key_suite(grit, report, name, argv, rc_name, rc_body, prompt_wait=1.5):
-    """bash and fish both get Ctrl-G rather than the idle trigger, and both
-    print above the prompt rather than into the line, so one suite covers them."""
+def key_suite(grit, report, name, argv, rc_name, rc_body, prompt_wait=1.5, key="\x07\x10"):
+    """bash and fish both get a key rather than the idle trigger, and both
+    print above the prompt rather than into the line, so one suite covers them.
+
+    The key is `^G^P` and not `^G` because grit binds only chords under `^G`:
+    anything left on the bare prefix waits out readline's keyseq-timeout before
+    it fires, on every press.
+    """
     print(f"\n{name} — the key binding")
     if not have(argv[0]):
         return report.skip(name, "not installed")
@@ -476,19 +481,32 @@ def key_suite(grit, report, name, argv, rc_name, rc_body, prompt_wait=1.5):
 
     sh.send("git ")
     sh.read(0.4)
-    sh.send("\x07")
+    sh.send(key)
     drawn = flatten(sh.read(2.5))
-    report.check("ctrl-g draws the table", "ALIAS" in drawn and "api" in drawn, repr(drawn))
+    report.check("the key draws the table", "ALIAS" in drawn and "api" in drawn, repr(drawn))
     report.check("what was typed survives", "git" in drawn.splitlines()[-1], repr(drawn))
 
-    sh.send("\x07")
-    report.check("ctrl-g again takes it down", "ALIAS" not in flatten(sh.read(2.0)))
+    sh.send(key)
+    report.check("the key again takes it down", "ALIAS" not in flatten(sh.read(2.0)))
 
-    sh.send("\x07")
+    sh.send(key)
     sh.read(2.0)
-    sh.send("\x07")
+    sh.send(key)
     report.check("a second cycle leaves no leftover rows",
                  flatten(sh.read(2.0)).count("ALIAS") == 0)
+
+    # An empty buffer is where a badly chosen second key bites, and it is the
+    # case the other presses above all miss because they type something first.
+    # `^G^D` reads as end-of-input there: it never fires, and it closes the
+    # shell. So the table appearing matters less here than there still being a
+    # shell for it to appear in.
+    sh.send("\x15")
+    sh.read(0.4)
+    sh.send(key)
+    on_empty = flatten(sh.read(2.5))
+    report.check("the key fires on an empty line too", "ALIAS" in on_empty, repr(on_empty))
+    sh.send(key)
+    sh.read(1.0)
 
     report.check("the shell is still usable", "still-here" in sh.run("\x15echo still-here", 1.5))
     sh.close()
@@ -553,6 +571,193 @@ def bash_prompt_command_suite(grit, report):
     fx.clean()
 
 
+def resource_suite(grit, report):
+    """Sourcing the integration a second time in a live shell.
+
+    This is what anyone does to pick up a new grit without opening a new
+    terminal, and it was fatal: a `typeset -r` constant made the second
+    `typeset` over that name an error, which aborts the eval where it stands.
+    Everything below that line — every widget, hook and binding — was then
+    silently not installed, and the shell looked like it had loaded fine.
+    """
+    print("\nzsh — sourcing it twice")
+    if not have("zsh"):
+        return report.skip("zsh re-source", "zsh not installed")
+
+    fx = Fixture(grit)
+    rc = fx.rc("rc.zsh", f"PS1='%% '\neval \"$({fx.grit} shell init zsh)\"\n")
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+
+    second = sh.run(f"source {rc}", 1.5)
+    report.check("a second sourcing reports no error",
+                 "read-only" not in second and "read-only variable" not in second,
+                 repr(second))
+
+    bound = sh.run("bindkey | grep grit", 1.5)
+    report.check("the bindings below the failure point are still installed",
+                 "_grit_picker" in bound and "_grit_preview_toggle" in bound, repr(bound))
+
+    # The hooks are what the idle preview runs on, and they live at the very
+    # bottom of the script — past everything an aborted eval would have skipped.
+    hooks = sh.run("add-zle-hook-widget -L line-pre-redraw", 1.5)
+    report.check("the redraw hook is registered exactly once",
+                 hooks.count("_grit_preview_on_redraw") == 1, repr(hooks))
+
+    sh.send("grit")
+    report.check("and the idle preview still draws after a re-source",
+                 "ALIAS" in flatten(sh.read(3.0)))
+    sh.send("\x03")
+    sh.read(0.5)
+    sh.close()
+
+    # The upgrade path, which is the one that actually bites: an rc file has
+    # already loaded an *older* grit, and you eval a newer one on top to try
+    # it. grit 0.2.0 declared this name `typeset -gir`, so the newer script
+    # met a read-only name it had not made and aborted on the declaration —
+    # dropping `-r` from the new script does nothing about that on its own.
+    sh2 = Shell(["zsh", "-f", "-i"], fx.env())
+    sh2.run("typeset -gir _grit_preview_patience=5", 0.8)
+    out = sh2.run(f"source {rc}", 1.8)
+    report.check("sourcing over an older grit's read-only constant is not fatal",
+                 "read-only" not in out, repr(out))
+    bound2 = sh2.run("bindkey | grep grit", 1.5)
+    report.check("and its bindings are installed anyway",
+                 "_grit_picker" in bound2, repr(bound2))
+    sh2.close()
+
+    fx.clean()
+
+
+def picker_suite(grit, report):
+    """The repo picker, and the chord it shares a prefix with.
+
+    Two things here are not visible from reading the scripts. One is that the
+    prefix rule actually fires — `bindkey` is what says where the preview
+    ended up, and a rule that silently did nothing would leave the preview on
+    a key that pauses for KEYTIMEOUT before every use. The other is that fzf
+    draws at all: it asks the terminal several questions on the way up and
+    stalls on any that go unanswered, which is what `CAPABILITY_REPLIES` is
+    for and what a mocked-out test would never notice.
+    """
+    print("\nzsh — the repo picker")
+    if not have("zsh"):
+        return report.skip("zsh picker", "zsh not installed")
+
+    fx = Fixture(grit)
+    rc = fx.rc("rc.zsh", f"PS1='%% '\neval \"$({fx.grit} shell init zsh)\"\n")
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+
+    bound = sh.run("bindkey | grep grit", 1.5)
+    report.check("the picker is on ^G^G", '"^G^G" _grit_picker' in bound, repr(bound))
+    report.check("the dashboard is on ^G^P",
+                 '"^G^P" _grit_preview_toggle' in bound, repr(bound))
+    report.check("nothing is left on the bare prefix",
+                 '"^G" _grit' not in bound.replace('"^G^G"', "").replace('"^G^P"', ""),
+                 repr(bound))
+    # fzf-git.sh is widely installed and claims `^G` as a prefix too. Landing
+    # on one of its letters is what sent an earlier default of ^G^R straight
+    # into its `Remotes` picker instead of grit's.
+    clashes = [c for c in "fbtrhslew" if f'"^G^{c.upper()}"' in bound]
+    report.check("no chord collides with fzf-git.sh's family", not clashes, str(clashes))
+
+    if not have("fzf"):
+        report.skip("the picker draws", "fzf not installed")
+        report.skip("enter leaves a command on the line", "fzf not installed")
+        sh.close()
+        fx.clean()
+        return
+
+    # The dashboard chord, on an empty line — the case that disqualified ^G^D,
+    # which is read as end-of-input there and closes the shell outright.
+    sh.send("\x07\x10")
+    on_empty = flatten(sh.read(3.0))
+    report.check("the dashboard chord is safe on an empty line",
+                 "ALIAS" in on_empty, repr(on_empty[-400:]))
+    sh.send("\x07\x10")
+    sh.read(1.0)
+
+    sh.send("\x07\x07")
+    drawn = flatten(sh.read(4.0))
+    report.check("the picker lists every repo",
+                 "api" in drawn and "dashboard" in drawn, repr(drawn[-800:]))
+    report.check("the detail pane is drawn beside it",
+                 "COMMITS" in drawn or "BRANCHES" in drawn, repr(drawn[-800:]))
+    report.check("the key hints are shown", "ctrl-d: cd" in drawn, repr(drawn[-400:]))
+
+    sh.send("\r")
+    after = flatten(sh.read(3.0))
+    report.check("enter leaves a command on the line", "grit api" in after, repr(after[-400:]))
+
+    # The line is left editable, not run: there should be no git output yet.
+    sh.send("\x15")
+    sh.read(0.5)
+
+    sh.close()
+    fx.clean()
+
+
+def picker_optout_suite(grit, report):
+    """Turning the picker off unbinds it and touches nothing else.
+
+    grit binds exactly what it is asked for. An earlier version rearranged the
+    keys when one was a prefix of the other, which was a rule to explain and
+    became wrong the moment a third chord existed — doubling `^G` lands on
+    `^G^G`, which is the picker.
+    """
+    print("\nzsh — the picker turned off")
+    if not have("zsh"):
+        return report.skip("zsh picker opt-out", "zsh not installed")
+
+    fx = Fixture(grit)
+    rc = fx.rc("rc-nopicker.zsh",
+               f"PS1='%% '\nGRIT_PICKER_KEY=\neval \"$({fx.grit} shell init zsh)\"\n")
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+
+    bound = sh.run("bindkey | grep grit", 1.5)
+    report.check("no picker is bound", "_grit_picker" not in bound, repr(bound))
+    report.check("and the dashboard key is left where it was",
+                 '"^G^P" _grit_preview_toggle' in bound, repr(bound))
+    sh.close()
+
+    # Asking for the old single key still works. It pauses, because grit's own
+    # chords make `^G` a prefix — that is the caller's trade to make, and not
+    # grit's to quietly undo for them.
+    rc2 = fx.rc("rc-bare.zsh",
+                f"PS1='%% '\nGRIT_PREVIEW_KEY='^G'\nGRIT_PICKER_KEY=\n"
+                f"eval \"$({fx.grit} shell init zsh)\"\n")
+    sh2 = Shell(["zsh", "-f", "-i"], fx.env())
+    sh2.run(f"source {rc2}", 1.2)
+    bare = sh2.run("bindkey | grep grit", 1.5)
+    report.check("a bare key is bound exactly as asked for",
+                 '"^G" _grit_preview_toggle' in bare, repr(bare))
+    sh2.close()
+
+    fx.clean()
+
+
+def bash_picker_suite(grit, report):
+    """The same prefix rule, in readline's spelling."""
+    print("\nbash — the repo picker")
+    if not have("bash"):
+        return report.skip("bash picker", "bash not installed")
+
+    fx = Fixture(grit)
+    rc = fx.rc("rc-picker.bash",
+               f'PS1="% "\nCOLUMNS={COLS}\neval "$({fx.grit} shell init bash)"\n')
+    sh = Shell(["bash", "--norc", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.5)
+
+    bound = sh.run("bind -X", 1.5)
+    report.check("the picker is bound", "__grit_picker" in bound, repr(bound))
+    report.check("the dashboard is bound", "__grit_preview_toggle" in bound, repr(bound))
+
+    sh.close()
+    fx.clean()
+
+
 def main():
     grit = sys.argv[1] if len(sys.argv) > 1 else "target/debug/grit"
     if not os.path.exists(grit):
@@ -563,6 +768,10 @@ def main():
     zsh_suite(grit, report)
     zsh_neighbours_suite(grit, report, autosuggestions)
     zsh_staleness_suite(grit, report)
+    resource_suite(grit, report)
+    picker_suite(grit, report)
+    picker_optout_suite(grit, report)
+    bash_picker_suite(grit, report)
     key_suite(grit, report, "bash", ["bash", "--norc", "-i"], "rc.bash",
               lambda fx: f'PS1="% "\nCOLUMNS={COLS}\neval "$({fx.grit} shell init bash)"\n')
     bash_prompt_command_suite(grit, report)

@@ -4,17 +4,32 @@
 #   eval "$(grit shell init zsh)"
 #
 # Type `grit`, pause, and the table appears under the line you are editing.
-# Type anything else and it goes. Ctrl-G draws it whenever you want it.
+# Type anything else and it goes. ^G^P draws it whenever you want it, and
+# ^G^G opens the repo picker.
 #
 # Settings, set before the eval:
 #
 #   GRIT_PREVIEW_TRIGGERS  array of buffers that summon it      (grit)
 #   GRIT_PREVIEW_DELAY     seconds of stillness first; may be    (0.5)
 #                          fractional
-#   GRIT_PREVIEW_KEY       key that draws it on demand; this    (^G)
-#                          replaces zsh's `send-break`. Empty
-#                          binds nothing.
+#   GRIT_PREVIEW_KEY       key that draws it on demand        (^G^P)
+#                          Empty binds nothing.
 #   GRIT_PREVIEW_IDLE      0 for the key only, no timer         (1)
+#   GRIT_PICKER_KEY        chord that opens the repo picker   (^G^G)
+#                          Empty binds nothing. Needs fzf.
+#
+# Both are chords under `^G`, and neither is bound to `^G` alone. That is not
+# ceremony. A line editor resolves an ambiguous prefix by waiting for the next
+# key — 404ms in zsh, 504ms in readline, measured — and it charges that wait to
+# the *shorter* binding, so anything left on a bare `^G` pauses before it fires,
+# every time. The letters avoid fzf-git.sh's family (`^G^{f,b,t,r,h,s,l,e,w}`)
+# as well, since that tool is common and claims `^G` as a prefix too. Setting
+# GRIT_PREVIEW_KEY='^G' still works; it will just pause.
+#
+# The preview is not on `^G^D`, which is the obvious mnemonic for a dashboard
+# and is unusable: on an empty command line that `^D` is read as end-of-input,
+# so it never fires the widget and closes the shell instead. `^P` is what this
+# feature is called in every other name here.
 #
 # Most of what follows is shaped by measured zsh 5.9 behaviour rather than by
 # taste. The load-bearing parts:
@@ -56,8 +71,9 @@ if [[ -o interactive ]]; then
 typeset -ga GRIT_PREVIEW_TRIGGERS
 (( $#GRIT_PREVIEW_TRIGGERS )) || GRIT_PREVIEW_TRIGGERS=( grit )
 : ${GRIT_PREVIEW_DELAY:=0.5}
-: ${GRIT_PREVIEW_KEY=^G}
+: ${GRIT_PREVIEW_KEY=^G^P}
 : ${GRIT_PREVIEW_IDLE:=1}
+: ${GRIT_PICKER_KEY=^G^G}
 
 typeset -ga _grit_preview_hl=()
 typeset -g  _grit_preview_text=
@@ -75,7 +91,21 @@ typeset -gi _grit_preview_fd=0
 # timer meant five seconds of patience, and at the current default it would mean
 # two and a half — halving the delay would quietly halve how long grit waits for
 # a slow refresh, which is not what changing a delay should do.
-typeset -gir _grit_preview_patience=5
+#
+# A constant, but deliberately not `typeset -r`, and guarded on top of that.
+#
+# Read-only is the obvious way to write a constant and it makes the *second*
+# sourcing of this script fatal: `typeset` over a read-only name is an error,
+# the eval aborts on this line, and every widget, hook and binding below it is
+# silently never installed — the shell looks like it loaded and does nothing.
+#
+# Dropping the `-r` is not enough on its own, because the name may already be
+# read-only from a script this one did not write. grit 0.2.0 declared it
+# `typeset -gir`, so on the one path that matters most — an rc file loads the
+# installed grit, then you eval a newer one to try it — a plain `typeset -gi`
+# here still lands on a read-only name and still aborts. Hence the guard: if
+# something has already defined it, leave it alone.
+(( ${+_grit_preview_patience} )) || typeset -gi _grit_preview_patience=5
 
 autoload -Uz add-zle-hook-widget
 
@@ -165,7 +195,11 @@ _grit_preview_toggle() {
 	else
 		# By hand, so the trigger does not have to match.
 		local -a keep=( $GRIT_PREVIEW_TRIGGERS )
-		GRIT_PREVIEW_TRIGGERS=( ${BUFFER%"${BUFFER##*[![:space:]]}"} )
+		# Quoted, and that is the whole of it: `a=( ${x} )` with x empty makes
+		# an array of *no* elements, not one empty element. Unquoted, the key
+		# did nothing at all on an empty command line — the trigger list it
+		# built to match the buffer against had nothing in it to match.
+		GRIT_PREVIEW_TRIGGERS=( "${BUFFER%"${BUFFER##*[![:space:]]}"}" )
 		_grit_preview_show
 		GRIT_PREVIEW_TRIGGERS=( $keep )
 	fi
@@ -275,6 +309,89 @@ _grit_preview_fire() {
 	return 0
 }
 
+# Open the repo picker: every repo on the left, `grit detail` on the right.
+#
+# fzf does the navigating. Not a shortcut taken for want of a terminal library —
+# aligned columns and colour for meaning is what grit's table already is, and a
+# picker over rows grit prints is the whole feature. grit supplies the two
+# halves: `shell rows` for the list, `detail` for the pane.
+#
+# The widget runs in this shell rather than in a child, which is what lets the
+# cd binding change this shell's directory. fzf opens the terminal itself, so
+# the command substitution carries back only the answer.
+_grit_picker() {
+    emulate -L zsh
+
+    if (( ! $+commands[fzf] )); then
+        zle -M "grit: the repo picker needs fzf on your PATH"
+        return 0
+    fi
+
+    # The preview lives in POSTDISPLAY and fzf is about to paint over those
+    # same rows; taking it down first is what stops it being stranded there.
+    _grit_preview_hide
+    _grit_preview_disarm
+
+    local picked
+    picked=$(_grit_picker_run)
+
+    # Unconditional and first: fzf has repainted the screen whether or not
+    # anything was chosen.
+    zle reset-prompt
+    [[ -n $picked ]] || return 0
+
+    local alias=${picked%%$'\t'*}
+    local action=${picked#*$'\t'}
+    [[ -n $alias ]] || return 0
+
+    if [[ $action == cd ]]; then
+        local dir
+        dir=$(command grit shell path $alias 2>/dev/null)
+        if [[ -n $dir && -d $dir ]]; then
+            builtin cd -- $dir
+            zle reset-prompt
+        fi
+        return 0
+    fi
+
+    # Left on the line rather than run. Which git command you wanted is the
+    # part grit cannot guess, and a picker that ran something on Enter would be
+    # one you could not use to start a commit.
+    BUFFER="grit $alias "
+    CURSOR=$#BUFFER
+    return 0
+}
+zle -N _grit_picker
+
+# The fzf invocation, kept apart so the widget above reads as what it does.
+#
+# `--cached` is why it opens instantly: the reading the inline preview draws
+# from, with a live one taken only if there is not one yet. ctrl-r reloads from
+# a fresh reading, which is the one path here allowed to be slow.
+#
+# `become` rather than plain acceptance, because two of the bindings have to
+# say which of them fired: fzf replaces itself with the printf and its output
+# is what the substitution above reads.
+_grit_picker_run() {
+    emulate -L zsh
+
+    local rows
+    rows=$(command grit --color=always shell rows --cached 2>/dev/null)
+    [[ -n $rows ]] || return 0
+
+    print -r -- $rows | command fzf \
+        --ansi \
+        --no-sort \
+        --layout=reverse \
+        --height=${GRIT_PICKER_HEIGHT:-80%} \
+        --preview 'grit --color=always detail {1}' \
+        --preview-window=${GRIT_PICKER_PREVIEW:-right,55%,wrap} \
+        --header 'enter: run git here · ctrl-d: cd · ctrl-r: refresh' \
+        --bind 'ctrl-r:reload(grit --color=always shell rows)' \
+        --bind "ctrl-d:become(printf '%s\tcd' {1})" \
+        --bind "enter:become(printf '%s\trun' {1})"
+}
+
 _grit_preview_on_redraw() {
 	emulate -L zsh
 	_grit_preview_hide
@@ -316,8 +433,16 @@ add-zle-hook-widget line-pre-redraw _grit_preview_on_redraw
 # prompt. Harmless — the widget rechecks the buffer — but it is a wakeup.
 add-zle-hook-widget line-finish _grit_preview_on_finish
 
+# Bound exactly as asked, with no rearranging. An earlier version moved a
+# binding out of the way when it was a prefix of the other, which is one more
+# thing to explain and was wrong the moment a third chord existed: doubling
+# `^G` lands on `^G^G`, which is the picker.
 if [[ -n $GRIT_PREVIEW_KEY ]]; then
-	bindkey $GRIT_PREVIEW_KEY _grit_preview_toggle
+    bindkey $GRIT_PREVIEW_KEY _grit_preview_toggle
+fi
+
+if [[ -n $GRIT_PICKER_KEY ]]; then
+    bindkey $GRIT_PICKER_KEY _grit_picker
 fi
 
 # Ctrl-C reaches the shell as a signal, not as a key — ZLE runs no hook for it,
