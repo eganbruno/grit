@@ -8,6 +8,8 @@
 //! - cells built from several differently-coloured pieces (`●3 ○1 ⚑1`)
 //! - one column may flex: when the table is wider than the terminal, that
 //!   column is the one that shrinks, and its text is truncated with an ellipsis
+//! - a column may also carry a fixed ceiling, which applies whatever the
+//!   terminal is doing — including when there is no terminal to measure
 //!
 //! Styling is applied at render time rather than baked into the strings, which
 //! is what makes truncation safe: we never cut through an ANSI escape. It also
@@ -186,6 +188,8 @@ struct Column {
     align: Align,
     /// The column that absorbs the shrinking when space runs out.
     flex: bool,
+    /// A ceiling on the column's width, independent of the terminal's.
+    max: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +212,7 @@ impl Table {
                     header: h.to_string(),
                     align: Align::Left,
                     flex: false,
+                    max: None,
                 })
                 .collect(),
             rows: Vec::new(),
@@ -233,6 +238,21 @@ impl Table {
     pub fn flex(mut self, index: usize) -> Self {
         for (i, col) in self.columns.iter_mut().enumerate() {
             col.flex = i == index;
+        }
+        self
+    }
+
+    /// Cap a column at `width` columns, whatever the terminal's width is.
+    ///
+    /// Distinct from [`Table::flex`], which only bites once the table is too
+    /// wide for the terminal: a capped column is cut on a 200-column screen
+    /// and when stdout is a pipe and there is no width to fit to. That is what
+    /// a commit subject needs — the field has no length anyone agreed to, and
+    /// one repo whose HEAD is a paragraph should not set the geometry for
+    /// every other row.
+    pub fn max_width(mut self, index: usize, width: usize) -> Self {
+        if let Some(col) = self.columns.get_mut(index) {
+            col.max = Some(width);
         }
         self
     }
@@ -273,7 +293,9 @@ impl Table {
                     .map(Cell::width)
                     .max()
                     .unwrap_or(0);
-                cells.max(col.header.width())
+                cells
+                    .max(col.header.width())
+                    .min(col.max.unwrap_or(usize::MAX))
             })
             .collect()
     }
@@ -367,7 +389,7 @@ impl Table {
         let widths = self.fitted_widths();
         let flex_idx = self.columns.iter().position(|c| c.flex);
         let cap = |i: usize| {
-            if Some(i) == flex_idx {
+            if Some(i) == flex_idx || self.columns[i].max.is_some() {
                 Some(widths[i])
             } else {
                 None
@@ -617,6 +639,72 @@ mod tests {
         let line = t.render().lines().nth(1).unwrap().to_string();
         assert!(line.width() <= 24, "{line:?} is {} wide", line.width());
         assert!(line.ends_with(symbol::ELLIPSIS));
+    }
+
+    #[test]
+    fn a_capped_column_is_cut_on_a_wide_terminal() {
+        let mut t = Table::new(["alias", "subject"])
+            .color(false)
+            .no_rule()
+            .max_width(1, 12)
+            .terminal_width(Some(200));
+        t.push_row(vec![
+            Cell::plain("api"),
+            Cell::plain("a rather long commit subject"),
+        ]);
+        let line = t.render().lines().nth(1).unwrap().to_string();
+        assert!(line.ends_with(symbol::ELLIPSIS), "{line:?}");
+        // 2 indent + the 5-wide `ALIAS` header + 2 gap + the 12-column cap.
+        assert_eq!(line.width(), 21);
+    }
+
+    #[test]
+    fn a_capped_column_is_cut_with_no_terminal_width_at_all() {
+        let mut t = Table::new(["alias", "subject"])
+            .color(false)
+            .no_rule()
+            .max_width(1, 12);
+        t.push_row(vec![
+            Cell::plain("api"),
+            Cell::plain("a rather long commit subject"),
+        ]);
+        let line = t.render().lines().nth(1).unwrap().to_string();
+        assert!(line.ends_with(symbol::ELLIPSIS), "{line:?}");
+    }
+
+    #[test]
+    fn a_capped_column_does_not_set_the_width_for_shorter_cells() {
+        // The cap is a ceiling, not a fixed width: a table of short subjects
+        // still sizes its column to the widest of them.
+        let mut t = Table::new(["alias", "subject"])
+            .color(false)
+            .no_rule()
+            .max_width(1, 40);
+        t.push_row(vec![Cell::plain("api"), Cell::plain("bump deps")]);
+        t.push_row(vec![Cell::plain("web"), Cell::plain("fix login")]);
+        for line in t.render().lines().skip(1) {
+            // 2 indent + the 5-wide `ALIAS` header + 2 gap + `bump deps`.
+            assert_eq!(line.width(), 18, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_column_capped_below_the_terminal_keeps_the_rest_of_the_row_intact() {
+        // Truncating the subject must not eat into the columns after it.
+        let mut t = Table::new(["alias", "subject", "age"])
+            .color(false)
+            .no_rule()
+            .flex(1)
+            .max_width(1, 10)
+            .terminal_width(Some(80));
+        t.push_row(vec![
+            Cell::plain("api"),
+            Cell::plain("a rather long commit subject"),
+            Cell::plain("3d"),
+        ]);
+        let line = t.render().lines().nth(1).unwrap().to_string();
+        assert!(line.ends_with("3d"), "{line:?}");
+        assert!(line.contains(symbol::ELLIPSIS), "{line:?}");
     }
 
     #[test]
