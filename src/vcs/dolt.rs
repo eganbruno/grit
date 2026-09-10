@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::error::{Error, Result};
 use crate::registry::VcsKind;
-use crate::vcs::{Commit, RepoState, Snapshot, Vcs};
+use crate::vcs::{Branch, Branches, Commit, RepoState, Snapshot, Tracking, Vcs};
 
 /// Everything the dashboard needs that does not depend on knowing the upstream,
 /// in one round trip.
@@ -47,6 +47,24 @@ select
   (select commit_hash from dolt_log limit 1) as head_id,
   (select message from dolt_log limit 1) as head_subject,
   (select timestampdiff(second, date, utc_timestamp()) from dolt_log limit 1) as head_age";
+
+/// Every local branch, most recently committed first.
+///
+/// `dolt_branches` carries the upstream as two columns — `remote` and the
+/// branch's name on it — and writes an empty string, not null, when there is
+/// none. `latest_commit_message` is the whole message, so the subject is cut
+/// out here exactly as [`SNAPSHOT_QUERY`]'s is.
+const BRANCHES_QUERY: &str = "\
+select
+  name,
+  hash as head_id,
+  latest_commit_message as head_subject,
+  timestampdiff(second, latest_commit_date, utc_timestamp()) as head_age,
+  remote as upstream_remote,
+  branch as upstream_branch,
+  active_branch() as active
+from dolt_branches
+order by latest_commit_date desc";
 
 /// Dolt commit hashes are 32 characters of base32; git abbreviates to a handful
 /// of hex digits. Trimming to a comparable width keeps the two backends' commit
@@ -105,6 +123,22 @@ impl Vcs for DoltVcs {
         }
 
         Ok(snapshot)
+    }
+
+    fn branches(&self, path: &Path) -> Result<Branches> {
+        if !path.exists() {
+            return Ok(Branches::Missing);
+        }
+
+        let out = query(path, "branches query", BRANCHES_QUERY)?;
+        let mut branches = parse_branches(&out).map_err(|source| Error::BadOutput {
+            program: "dolt",
+            source,
+        })?;
+
+        measure_checked_out_branch(path, &mut branches);
+
+        Ok(Branches::Listed(branches))
     }
 
     fn exec(&self, path: &Path, args: &[OsString]) -> Result<ExitStatus> {
@@ -307,6 +341,92 @@ fn parse_snapshot(json: &str) -> serde_json::Result<Snapshot> {
     })
 }
 
+/// The row [`BRANCHES_QUERY`] produces, one per branch.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct BranchRow {
+    name: String,
+    head_id: Option<String>,
+    head_subject: Option<String>,
+    #[serde(deserialize_with = "wire_i64")]
+    head_age: i64,
+    upstream_remote: Option<String>,
+    upstream_branch: Option<String>,
+    active: Option<String>,
+}
+
+/// Parse [`BRANCHES_QUERY`]'s output.
+///
+/// Every branch comes back [`Tracking::Unmeasured`]: the distance to an
+/// upstream needs a `dolt_log(<range>)` query of its own, and doing that per
+/// branch would turn one round trip into one per branch.
+/// [`measure_checked_out_branch`] then upgrades the single row worth paying
+/// for.
+fn parse_branches(json: &str) -> serde_json::Result<Vec<Branch>> {
+    let rows: Rows<BranchRow> = serde_json::from_str(json)?;
+
+    Ok(rows
+        .rows
+        .into_iter()
+        .map(|row| {
+            // An empty string is dolt's "no remote"; a missing key is too.
+            let upstream = row
+                .upstream_remote
+                .zip(row.upstream_branch)
+                .filter(|(remote, branch)| !remote.is_empty() && !branch.is_empty())
+                .map(|(remote, branch)| format!("{remote}/{branch}"));
+
+            Branch {
+                is_head: row.active.as_deref() == Some(row.name.as_str()),
+                head: row.head_id.as_deref().map(|id| Commit {
+                    short_id: id.chars().take(SHORT_ID_LEN).collect(),
+                    subject: subject_line(row.head_subject.as_deref().unwrap_or_default())
+                        .to_string(),
+                    age: compact_age(row.head_age),
+                }),
+                tracking: match upstream {
+                    Some(upstream) => Tracking::Unmeasured { upstream },
+                    None => Tracking::Untracked,
+                },
+                name: row.name,
+            }
+        })
+        .collect())
+}
+
+/// Count the checked-out branch's distance from its upstream, in place.
+///
+/// One extra round trip, spent on the branch being worked on. Failure is
+/// expected rather than exceptional — the remote's branch may never have been
+/// fetched, in which case dolt cannot resolve the range — and leaves the row
+/// [`Tracking::Unmeasured`], which is what it already was.
+fn measure_checked_out_branch(path: &Path, branches: &mut [Branch]) {
+    let Some(branch) = branches
+        .iter_mut()
+        .find(|b| b.is_head && matches!(b.tracking, Tracking::Unmeasured { .. }))
+    else {
+        return;
+    };
+
+    let Tracking::Unmeasured { upstream } = &branch.tracking else {
+        return;
+    };
+
+    let sql = ahead_behind_query(&branch.name, upstream);
+    let Some((ahead, behind)) = query(path, "ahead/behind query", &sql)
+        .ok()
+        .and_then(|out| parse_ahead_behind(&out).ok())
+    else {
+        return;
+    };
+
+    branch.tracking = Tracking::Tracked {
+        upstream: upstream.clone(),
+        ahead,
+        behind,
+    };
+}
+
 /// The subject of a commit message: its first line.
 ///
 /// `dolt_log.message` is the *whole* message where git's `%s` is the subject
@@ -479,6 +599,75 @@ mod tests {
     }
 
     /// Verbatim from the commit that put a body in the dashboard.
+    /// Captured verbatim from `dolt sql -r json`, including its habit of
+    /// writing an *empty string* rather than null for a branch with no
+    /// upstream — and of omitting a null column from the output altogether.
+    const BRANCHES: &str = r#"{"rows": [{"active":"ingress/aus-lci","head_age":72767,"head_id":"72gc777u8rjc4dl7he2b4sp9p3v81hc7","head_subject":"add data","name":"main","upstream_branch":"main","upstream_remote":"origin"},{"active":"ingress/aus-lci","head_age":81641,"head_id":"m761tl278prkmidtvc9j5mhnp30c12dk","head_subject":"update job after answer from sustamize","name":"ingress/aus-lci","upstream_branch":"","upstream_remote":""}]}"#;
+
+    #[test]
+    fn a_branch_listing_reads_name_commit_and_age() {
+        let branches = parse_branches(BRANCHES).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].name, "main");
+        let head = branches[0].head.as_ref().unwrap();
+        assert_eq!(head.short_id, "72gc777u");
+        assert_eq!(head.subject, "add data");
+        assert_eq!(head.age, "20h");
+    }
+
+    #[test]
+    fn the_active_branch_is_the_one_marked() {
+        let branches = parse_branches(BRANCHES).unwrap();
+        assert!(!branches[0].is_head);
+        assert!(branches[1].is_head);
+    }
+
+    #[test]
+    fn an_empty_remote_is_no_upstream_rather_than_an_upstream_named_slash() {
+        // Dolt writes "" where git omits the field. Zipping the two columns
+        // without this check yields an upstream called "/".
+        let branches = parse_branches(BRANCHES).unwrap();
+        assert_eq!(branches[1].tracking, Tracking::Untracked);
+    }
+
+    #[test]
+    fn a_tracked_branch_starts_unmeasured() {
+        // The distance costs a query per branch, so the listing does not pay
+        // for it; only the checked-out branch is upgraded afterwards.
+        let branches = parse_branches(BRANCHES).unwrap();
+        assert_eq!(
+            branches[0].tracking,
+            Tracking::Unmeasured {
+                upstream: "origin/main".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_branch_listing_trims_a_commit_body_off_the_subject() {
+        // The whole reason this command exists: dolt's `latest_commit_message`
+        // is the entire message, and a body in a cell wrecks the table.
+        let out = BRANCHES.replace("add data", "the subject\\n\\nand a body");
+        let branches = parse_branches(&out).unwrap();
+        let subject = &branches[0].head.as_ref().unwrap().subject;
+        assert_eq!(subject, "the subject");
+        assert!(!subject.contains('\n'), "{subject:?}");
+    }
+
+    #[test]
+    fn a_branch_listing_survives_a_sql_server_stringifying_everything() {
+        // Same wire-protocol trap as the snapshot: with a `dolt sql-server`
+        // running, every number arrives quoted.
+        let out = BRANCHES.replace(r#""head_age":72767"#, r#""head_age":"72767""#);
+        let branches = parse_branches(&out).unwrap();
+        assert_eq!(branches[0].head.as_ref().unwrap().age, "20h");
+    }
+
+    #[test]
+    fn an_empty_branch_listing_is_not_an_error() {
+        assert!(parse_branches("{}").unwrap().is_empty());
+    }
+
     #[test]
     fn only_the_first_line_of_a_commit_message_is_the_subject() {
         let message = "Move EXIOBASE FLAG and land management values to premium slots (API-9974)\n\

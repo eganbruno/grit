@@ -187,7 +187,7 @@ fn first_line(s: &str) -> String {
 /// title and number — so without a ceiling one talkative repo sets the width
 /// for every row, and a run whose stdout is a pipe has no width to fit to at
 /// all.
-const SUBJECT_WIDTH: usize = 60;
+pub const SUBJECT_WIDTH: usize = 60;
 
 /// The dashboard as a table, before anyone decides how to paint it.
 ///

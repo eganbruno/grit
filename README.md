@@ -111,6 +111,8 @@ grit status                     # dashboard across every repo
 grit status --tag release       # just the release group
 grit status api docs            # just these two
 
+grit branch --tag ingress       # every branch of that group, one line each
+
 grit docs commit -am "changelog"  # run git in the docs repo
 grit api log --oneline -n 10      # any git command, flags and all
 grit @release fetch               # run it in every repo tagged `release`
@@ -128,14 +130,15 @@ running anything — see
 | `grit rm <alias>...` | Forget an alias. The repository itself is untouched. Long form: `grit remove`. |
 | `grit show` | Every registered repo: alias, kind, tags, path. |
 | `grit status [alias...]` | Branch, sync state and working-tree state for each repo. |
+| `grit branch [alias...]` | Every branch of every repo, one line each. |
 | `grit <alias> <args...>` | Run the repo's own VCS there, with those arguments. |
 | `grit @<tag> <args...>` | Run it in every repo carrying that tag. |
 | `grit shell enable [shell]` | Add the integration to your shell's startup file. |
 | `grit shell disable [shell]` | Take exactly that block back out. |
 | `grit shell init <shell>` | Print the integration. `zsh`, `bash` or `fish`. |
 
-`show` and `status` both take `--tag <TAG>` and `--json`; `status` also takes a
-list of aliases and `--cached`. `register` takes `--tag` and `--force`, and
+`show`, `status` and `branch` all take `--tag <TAG>` and `--json`; `status` and
+`branch` also take a list of aliases, and `status` takes `--cached`. `register` takes `--tag` and `--force`, and
 `shell enable`/`disable` take `--file`. `--color <auto|always|never>` is
 global; `-k` belongs to the fan-out and goes before the target, as in
 `grit -k @release fetch`.
@@ -149,6 +152,7 @@ ships with the binary instead of drifting from it here:
 ```bash
 grit --help                 # the map, and every environment variable
 grit status --help          # each flag, and how to read the table
+grit branch --help          # why this exists rather than `grit @tag branch`
 grit register --help        # paths, tags, moving an alias somewhere new
 grit show --help            # reading the JSON from a script
 grit shell enable --help    # which file, and the block it writes

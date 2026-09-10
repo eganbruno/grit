@@ -63,6 +63,83 @@ pub struct Commit {
     pub age: String,
 }
 
+/// One branch as a listing needs it.
+///
+/// Deliberately not a `Snapshot`: a listing wants many branches cheaply, and
+/// most of what a snapshot carries (the working tree's counts, the stash, an
+/// in-progress merge) belongs to the checkout rather than to a branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Branch {
+    pub name: String,
+    /// True for the branch that is checked out.
+    pub is_head: bool,
+    pub tracking: Tracking,
+    /// `None` on a branch with no commits, which git allows on an unborn HEAD.
+    pub head: Option<Commit>,
+}
+
+/// The result of listing one repository's branches.
+///
+/// `Missing` is a variant rather than an error for the same reason
+/// [`RepoState::Missing`] is: a registered path that has been deleted is
+/// information about that repo, not a failure of the command, and it must not
+/// take the exit code down with it. An empty `Listed` means something else
+/// entirely — a real repository with no commits yet — and the two would be
+/// indistinguishable as a bare `Vec`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Branches {
+    Listed(Vec<Branch>),
+    Missing,
+}
+
+impl Branches {
+    pub fn as_slice(&self) -> &[Branch] {
+        match self {
+            Branches::Listed(branches) => branches,
+            Branches::Missing => &[],
+        }
+    }
+}
+
+/// A branch's relationship to its upstream.
+///
+/// Four cases rather than an `Option<(u32, u32)>`, because "no upstream", "the
+/// upstream was deleted" and "nobody counted" are three different things and a
+/// listing that renders them identically is lying about two of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum Tracking {
+    /// No upstream is configured.
+    Untracked,
+    /// Tracking `upstream`, and this far from it.
+    Tracked {
+        upstream: String,
+        ahead: u32,
+        behind: u32,
+    },
+    /// Tracking `upstream`, which no longer exists on the remote.
+    Gone { upstream: String },
+    /// Tracking `upstream`; the distance was not measured.
+    ///
+    /// Dolt counts commits with a `dolt_log(<range>)` query, which takes one
+    /// round trip per branch — so a listing that measured every branch of a
+    /// fifteen-branch database would spend fifteen. The checked-out branch is
+    /// measured because it is the one being worked on; the rest report their
+    /// upstream without a distance.
+    Unmeasured { upstream: String },
+}
+
+impl Tracking {
+    pub fn upstream(&self) -> Option<&str> {
+        match self {
+            Tracking::Untracked => None,
+            Tracking::Tracked { upstream, .. }
+            | Tracking::Gone { upstream }
+            | Tracking::Unmeasured { upstream } => Some(upstream),
+        }
+    }
+}
+
 /// What the repository is in the middle of, if anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -104,6 +181,13 @@ pub trait Vcs: Send + Sync {
 
     /// Read the repository's current state.
     fn snapshot(&self, path: &Path) -> Result<Snapshot>;
+
+    /// List the repository's local branches, most recently committed first.
+    ///
+    /// Local only. A listing that included every remote-tracking ref would be
+    /// dominated by them on any repo with a real remote, which is the opposite
+    /// of what a summary is for.
+    fn branches(&self, path: &Path) -> Result<Branches>;
 
     /// Run the backend's CLI in `path` with the caller's arguments.
     ///
