@@ -340,12 +340,19 @@ forking it.
 ### Cutting a release
 
 ```bash
-# bump `version` in Cargo.toml, then:
+# add the section to CHANGELOG.md and bump `version` in Cargo.toml, then:
 cargo check                            # refresh Cargo.lock with the new version
-git commit -am "release 0.2.0"
-git tag -a v0.2.0 -m "release 0.2.0"   # -a matters, see below
+git commit -am "release 0.3.0"
+git tag -a v0.3.0 -m "release 0.3.0"   # -a matters, see below
 git push --follow-tags
 ```
+
+The heading has to be the bare version — `## [0.3.0] - 2026-09-11` — because
+dist looks the release up in `CHANGELOG.md` by it and puts what it finds at the
+top of the GitHub release, above the installer and the download table. A
+section it cannot match is not an error: the release simply goes out with the
+generated boilerplate alone, which is what 0.1.0 and 0.2.0 did, there being no
+changelog then to find.
 
 `-a` is load-bearing. A bare `git tag v0.2.0` makes a *lightweight* tag, and
 `git push --follow-tags` pushes only annotated ones — so the push succeeds,
