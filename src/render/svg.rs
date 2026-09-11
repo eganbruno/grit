@@ -18,7 +18,7 @@
 
 use owo_colors::Style;
 
-use crate::render::table::{Highlight, Table};
+use crate::render::table::{Cell, Highlight, Table};
 use crate::render::theme::ink;
 
 /// Monospace geometry, in CSS pixels.
@@ -135,6 +135,35 @@ impl Screen {
 
     pub fn blank(&mut self) {
         self.line("", Style::new());
+    }
+
+    /// Append one line built from a [`Cell`]'s styled spans.
+    ///
+    /// [`Screen::line`] paints a whole line in one style, which the dashboard's
+    /// prompt and footer want and a detail card's header line does not: that
+    /// one is a branch, an upstream and two sets of counts, each in its own
+    /// colour. A cell is already exactly that, so this lays one out rather
+    /// than making the caller stitch highlights together by hand.
+    pub fn cell(&mut self, indent: &str, cell: &Cell) {
+        self.text.push_str(indent);
+        self.at += indent.chars().count();
+
+        for span in cell.spans() {
+            let start = self.at;
+            self.at += span.text.chars().count();
+            self.text.push_str(&span.text);
+
+            if span.style != Style::new() && !span.text.is_empty() {
+                self.highlights.push(Highlight {
+                    start,
+                    end: self.at,
+                    style: span.style,
+                });
+            }
+        }
+
+        self.text.push('\n');
+        self.at += 1;
     }
 
     /// Append a whole table, keeping its highlight ranges aligned.

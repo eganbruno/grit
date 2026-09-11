@@ -27,6 +27,7 @@ Examples:
   grit status --tag release                just the release group
   grit branch --tag release                every branch of that group
   grit show                                aliases, paths and tags
+  grit detail docs                         one repo in depth
   grit docs commit -am \"changelog\"         run git in the docs repo
   grit @release fetch                      fetch every repo tagged release
   grit -k @release fetch                   keep going when one of them fails
@@ -134,6 +135,29 @@ file the answer came from — where `grit status --json` is a bare array:
   cd \"$(grit show --json | jq -r '.repos[] | select(.alias == \"api\") | .path')\"
 ";
 
+/// Shown under `grit detail --help`.
+const DETAIL_HELP: &str = "\
+Examples:
+  grit detail api              everything grit knows about one repo
+  grit detail api --json       the same, machine-readable
+
+What it shows, in sections, and each one only when it has something in it:
+  the header      branch, upstream, sync and working-tree state
+  CHANGES         one row per changed path, with a two-column code
+                  left = staged, right = unstaged; `?` untracked, `U` conflicted
+  COMMITS         the last few, most recent first
+  BRANCHES        each branch against its upstream; `*` marks the current one
+                  a blank sync column means nothing was compared — no upstream,
+                  or one that has been deleted — which is not the same as `✓`
+  STASHES         the stash stack, newest first
+
+Unlike `grit status`, this runs the backend every time — there is no cache
+behind it, because it is one repo and it is asked for by name.
+
+  grit detail api --json | jq -r '.files[].path'
+  grit detail api --json | jq -r '.branches[] | select(.distance.behind > 0) | .name'
+";
+
 /// Shown under `grit status --help`.
 /// Shown under `grit branch --help`.
 const BRANCH_HELP: &str = "\
@@ -203,18 +227,39 @@ grit edits a startup file when you ask it to and at no other time — installing
 grit changes nothing on its own. `disable` removes only the marked block that
 `enable` wrote; a line you added yourself is reported rather than edited.
 
-zsh draws the table after a pause. bash and fish bind ^G instead, because
+zsh draws the table after a pause. bash and fish bind a key instead, because
 neither runs a hook while you sit at the prompt.
 
-Tuning the zsh integration, set *before* the eval:
+Keys, in all three shells:
+  ^G^G    the repo picker: every repo, with `grit detail` beside it. Needs fzf.
+  ^G^P    the inline dashboard, on demand
+
+Both are chords, and nothing is bound to ^G on its own. A line editor resolves
+an ambiguous prefix by waiting for the next key — 404ms in zsh, 504ms in
+readline — and charges it to the shorter binding, so anything left on a bare ^G
+pauses before it fires, every press. The letters also stay clear of
+fzf-git.sh's ^G^{f,b,t,r,h,s,l,e,w}, which is common and claims ^G too.
+
+GRIT_PREVIEW_KEY='^G' still works if you want the old single key. It will just
+pause. grit binds what you ask for and does not rearrange it.
+
+Inside the picker:
+  enter   put `grit <alias> ` on the command line, for you to finish
+  ctrl-d  cd to the repo
+  ctrl-r  take a fresh reading
+
+Tuning, set *before* the eval:
   GRIT_PREVIEW_TRIGGERS=( grit gs )     buffers that summon it   (grit)
   GRIT_PREVIEW_DELAY=0.2                seconds of stillness     (0.5)
-  GRIT_PREVIEW_KEY='^T'                 draw it on demand        (^G)
+  GRIT_PREVIEW_KEY='^T'                 draw it on demand      (^G^P)
   GRIT_PREVIEW_IDLE=0                   the key only, no timer
+  GRIT_PICKER_KEY='^T^R'                open the picker        (^G^G)
+  GRIT_PICKER_HEIGHT=100%               how much screen it takes (80%)
+  GRIT_PICKER_PREVIEW=down,60%          where the detail pane goes
 
-Before, because the key is bound as the script is sourced — set it afterwards
-and the binding is already made. The other three are read as you type, so they
-do take effect later; setting all four up front is the rule that always holds.
+Before, because the keys are bound as the script is sourced — set them
+afterwards and the binding is already made. The rest are read as you type, so
+they do take effect later; setting everything up front is the rule that holds.
 ";
 
 #[derive(Debug, Parser)]
@@ -275,6 +320,10 @@ pub enum Command {
     /// Every branch of every repo, one line each.
     #[command(after_help = BRANCH_HELP)]
     Branch(BranchArgs),
+
+    /// One repo in depth: changed paths, recent commits, branches, stashes.
+    #[command(after_help = DETAIL_HELP)]
+    Detail(DetailArgs),
 
     /// Shell integration — the dashboard, at the prompt, before you hit enter.
     #[command(after_help = SHELL_HELP)]
@@ -361,6 +410,16 @@ pub struct StatusArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct DetailArgs {
+    /// The repo to look at.
+    pub alias: String,
+
+    /// Emit JSON instead of the card.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ShellArgs {
     #[command(subcommand)]
     pub command: ShellCommand,
@@ -392,6 +451,14 @@ pub enum ShellCommand {
     /// Take a fresh reading into the cache, printing nothing.
     #[command(hide = true)]
     Refresh(ShellRefreshArgs),
+
+    /// The dashboard's rows alone, one repo per line, for a picker to read.
+    #[command(hide = true)]
+    Rows(ShellRowsArgs),
+
+    /// Where one alias points, so a picker can cd there.
+    #[command(hide = true)]
+    Path(ShellPathArgs),
 }
 
 #[derive(Debug, Args)]
@@ -431,6 +498,22 @@ pub struct ShellPreviewArgs {
     /// started a refresh and will ask again a second later.
     #[arg(long, value_name = "SECONDS")]
     pub max_age: Option<i64>,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellPathArgs {
+    /// The repo to locate.
+    pub alias: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellRowsArgs {
+    /// Show the last reading rather than taking a new one.
+    ///
+    /// The picker opens on the cache so it appears instantly, exactly as the
+    /// inline preview does, and refreshes behind itself.
+    #[arg(long)]
+    pub cached: bool,
 }
 
 #[derive(Debug, Args)]

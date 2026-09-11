@@ -37,7 +37,7 @@ src/
 tests/
   common/mod.rs   TestEnv — a temp registry and throwaway git repos
   cli_*.rs        one file per command, plus one per VCS backend
-  readme_svg.rs   renders the README's dashboard, and guards it against drift
+  readme_svg.rs   renders the README's examples, and guards them against drift
   shell/          a pty harness for the integrations; run by hand
 ```
 
@@ -48,18 +48,21 @@ Two rules keep this honest:
   what lets a new VCS backend work without touching any command.
 - **Parsers are pure functions.** `vcs/git.rs` separates "run the command" from
   "parse its output" so the parsing — where the bugs are — is tested against
-  fixture strings, with no repository on disk.
+  fixture strings, with no repository on disk. One parser per format, not per
+  caller: `parse_status` yields the dashboard's counts and the detail view's
+  file list from a single walk, because the porcelain v2 entry grammar is
+  fiddly enough that a second copy of it would drift from the first.
 
-## The README's dashboard
+## The README's examples
 
-The example at the top of the README is an image, because GitHub gives no way
-to colour text inside a fenced block — and colour is half of what that example
-is showing. It is *generated* rather than drawn, from the same `build_table`
-the terminal uses and the same `Theme` it paints with, so it cannot come to
-disagree with the tool it advertises.
+The terminal examples in the README are images, because GitHub gives no way to
+colour text inside a fenced block — and colour is half of what they are
+showing. They are *generated* rather than drawn, from the same `build_table`
+and `build_card` the terminal uses and the same `Theme` it paints with, so they
+cannot come to disagree with the tool they advertise.
 
-If you repaint `Theme`, or change what the status table shows, `cargo test`
-fails with a stale-asset message. Regenerate and commit the result:
+If you repaint `Theme`, or change what those tables show, `cargo test` fails
+with a stale-asset message. Regenerate and commit the result:
 
 ```bash
 cargo test --test readme_svg -- --ignored
@@ -68,6 +71,10 @@ cargo test --test readme_svg -- --ignored
 The rows are invented — fixed SHAs and ages — because the point is a
 representative dashboard and real repos would mean random hashes and ages that
 grow by the day. Everything about how they are *rendered* is real.
+
+To add an example, add it to `examples()` in `tests/readme_svg.rs`; the two
+tests that match and regenerate walk that list, so nothing else needs
+touching.
 
 ## Adding a command
 
@@ -203,8 +210,15 @@ Two exist: `vcs/git.rs` and `vcs/dolt.rs`. Say you want `jj`.
 
 1. Add the variant to `VcsKind` in `src/registry/model.rs`, and its `as_str()`
    arm.
-2. Add `src/vcs/jj.rs` implementing `Vcs` — four methods: `kind`, `discover`,
-   `snapshot`, `exec`.
+2. Add `src/vcs/jj.rs` implementing `Vcs` — five methods: `kind`, `discover`,
+   `snapshot`, `detail`, `exec`. `detail` is the deeper reading `grit detail`
+   and the repo picker render: changed paths, recent commits, stashes and
+   branches. It is required rather than defaulted, because a default returning
+   an empty `Detail` would give the new backend a card that renders as a
+   repository with nothing in it — which reads as a fact rather than as a gap.
+   Where the backend genuinely cannot answer a part of it, leave that part
+   empty and say why in a comment, the way `vcs/dolt.rs` does for a stash's
+   age.
 3. List it in `provider_for` and `all_providers` in `src/vcs/mod.rs`.
    `all_providers` is the order registration tries when detecting what a path
    is, so put the more specific backend first: dolt precedes git so that a

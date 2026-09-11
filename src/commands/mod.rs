@@ -13,6 +13,7 @@
 //! any change here.
 
 pub mod branch;
+pub mod detail;
 pub mod register;
 pub mod run;
 pub mod shell;
@@ -36,6 +37,7 @@ pub fn dispatch(cli: &Cli, ctx: &mut Ctx) -> Result<i32> {
         Some(Command::Show(args)) => show::run(args, ctx).map(|_| 0),
         Some(Command::Status(args)) => status::run(args, ctx),
         Some(Command::Branch(args)) => branch::run(args, ctx),
+        Some(Command::Detail(args)) => detail::run(args, ctx),
         Some(Command::Shell(args)) => shell::run(args, ctx),
         Some(Command::External(argv)) => match help_or_version(argv)? {
             Some(code) => Ok(code),

@@ -182,7 +182,7 @@ fn note_cells(repo: &Repo, message: &str, style: owo_colors::Style) -> Vec<Cell>
 /// Empty rather than a symbol of its own: "not measured" is the absence of a
 /// reading, and inventing a glyph for it would put something on screen that
 /// looks like a finding.
-fn sync_cell(tracking: &Tracking) -> Cell {
+pub(crate) fn sync_cell(tracking: &Tracking) -> Cell {
     match tracking {
         Tracking::Untracked => Cell::styled(symbol::NONE, Theme::muted()),
         Tracking::Gone { .. } => Cell::styled("gone", Theme::warn()),
@@ -270,4 +270,51 @@ fn print_json(rows: &[Row]) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&repos)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vcs::Tracking;
+
+    fn tracked(ahead: u32, behind: u32) -> Tracking {
+        Tracking::Tracked {
+            upstream: "origin/main".to_string(),
+            ahead,
+            behind,
+        }
+    }
+
+    #[test]
+    fn a_branch_level_with_its_upstream_gets_a_tick() {
+        assert_eq!(sync_cell(&tracked(0, 0)).text(), symbol::SYNCED);
+    }
+
+    #[test]
+    fn a_diverged_branch_counts_both_ways() {
+        assert_eq!(sync_cell(&tracked(2, 5)).text(), "↑2 ↓5");
+    }
+
+    #[test]
+    fn a_branch_with_no_upstream_is_marked_as_having_none() {
+        assert_eq!(sync_cell(&Tracking::Untracked).text(), symbol::NONE);
+    }
+
+    #[test]
+    fn a_deleted_upstream_says_gone_rather_than_showing_a_tick() {
+        let gone = Tracking::Gone {
+            upstream: "origin/main".to_string(),
+        };
+        assert_eq!(sync_cell(&gone).text(), "gone");
+    }
+
+    #[test]
+    fn a_distance_nobody_measured_renders_as_nothing_at_all() {
+        // Not a tick, and not a glyph of its own: "not measured" is the
+        // absence of a reading, and anything on screen would look like one.
+        let unmeasured = Tracking::Unmeasured {
+            upstream: "origin/main".to_string(),
+        };
+        assert!(sync_cell(&unmeasured).is_empty());
+    }
 }
