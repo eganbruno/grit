@@ -8,7 +8,7 @@ records what is easy to get wrong.
 ## Commands
 
 ```bash
-cargo test                                   # 285 tests, under a minute
+cargo test                                   # 383 tests, under two minutes
 cargo clippy --all-targets -- -D warnings    # CI gate
 cargo fmt
 GRIT_CONFIG=/tmp/scratch.toml cargo run -- status
@@ -309,6 +309,18 @@ that shell's directory.
 - **`grit shell path` exists so the shell does not parse JSON.** `show --json`
   carries the same fact, but reading it from a key binding meant either a jq
   dependency or a grep-and-sed that is wrong on a path with a quote in it.
+- **`$COLUMNS` is wrong inside the preview pane, and `$FZF_PREVIEW_COLUMNS` is
+  not.** fzf exports both, but it runs the preview command through `$SHELL -c`,
+  and zsh re-derives `COLUMNS` from the tty as it starts — the tty being the
+  whole terminal. So the export is overwritten before grit is reached, and the
+  card is laid out to 200 columns inside a 110-column pane. It does not look
+  like a width bug: `wrap` is on, so fzf folds every branch row onto a second
+  line prefixed `↳`, and a card whose columns have stopped lining up reads as
+  the table module having come apart. `COMMITS` hides it too, being narrow
+  enough to fit either way; `BRANCHES` carries two columns of full branch names
+  and is the section that gives. `context.rs::terminal_width` takes the
+  prefixed name first, which is what fzf's own manual says to do, and
+  `cli_detail.rs` pins it by running the card at both widths.
 
 ## Not yet built
 

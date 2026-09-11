@@ -263,7 +263,10 @@ app, but a CLI's config belongs where you can dotfile-manage it.
 
 Colour follows [`NO_COLOR`](https://no-color.org) and switches off when stdout
 is not a terminal. `--color always|never|auto` overrides both. When stdout is
-not a terminal there is no width to measure, so `$COLUMNS` is used if set.
+not a terminal there is no width to measure, so `$COLUMNS` is used if set —
+except inside an fzf preview, where `$FZF_PREVIEW_COLUMNS` is used instead,
+because the shell fzf runs the preview through overwrites `$COLUMNS` with the
+width of the whole terminal rather than of the pane.
 
 The last dashboard is cached under `~/.cache/grit/status.json` — or wherever
 `$GRIT_CACHE` points, or `$XDG_CACHE_HOME` moves it to. Deleting it costs one `grit status`. It is refused rather

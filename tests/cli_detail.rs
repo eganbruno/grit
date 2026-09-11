@@ -314,3 +314,88 @@ fn the_detail_view_takes_a_reading_rather_than_using_the_cache() {
         .stdout(predicate::str::contains("a.txt"))
         .stdout(predicate::str::contains("CHANGES"));
 }
+
+/// The card is drawn inside an fzf preview pane, and fzf is the only thing
+/// that knows how wide that pane is.
+///
+/// It exports `$COLUMNS` for it, but the preview command runs through
+/// `$SHELL -c` and zsh re-derives `COLUMNS` from the tty on the way in — the
+/// tty being the whole terminal, not the pane. So `COLUMNS` reaches grit
+/// holding the wrong number, which is the shape set up here: the wide value
+/// `TestEnv` pins, with the narrow one alongside it under fzf's own name.
+///
+/// Getting this wrong is not a near miss. The branch section carries two
+/// columns of full branch names, so a card fitted to a 200-column terminal is
+/// half as wide again as the pane it lands in, and fzf wraps every row of it
+/// onto a second line — a table whose columns no longer line up, which is the
+/// one thing the table module exists to prevent.
+#[test]
+fn a_card_in_an_fzf_preview_is_fitted_to_the_pane_and_not_to_the_terminal() {
+    let env = TestEnv::new();
+    let repo = busy(&env);
+    common::git(
+        &repo,
+        &["branch", "feature/a-branch-name-with-some-length-to-it"],
+    );
+    env.commit(
+        &repo,
+        "c.txt",
+        "three\n",
+        "a commit subject long enough to need cutting at a pane's width",
+    );
+    env.register("api", &repo, &[]);
+
+    // The path line is exempt: it is a loose line rather than a table row, so
+    // nothing fits it to anything, and a temp directory is longer than any
+    // pane. That is its own gap, not this one.
+    let root = env.root().display().to_string();
+    let widest = |stdout: &str| {
+        stdout
+            .lines()
+            .filter(|l| !l.contains(&root))
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+
+    let card = |pane: Option<&str>| {
+        let mut cmd = env.grit();
+        // `TestEnv::grit` has already pinned COLUMNS at 200.
+        if let Some(pane) = pane {
+            cmd.env("FZF_PREVIEW_COLUMNS", pane);
+        }
+        let out = cmd.args(["detail", "api"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let narrow = card(Some("70"));
+    assert!(
+        widest(&narrow) <= 70,
+        "a line is {} wide, so fzf would wrap it:\n{narrow}",
+        widest(&narrow)
+    );
+
+    // Without it the same card is laid out to the terminal. Asserted so this
+    // cannot pass by having nothing wide enough to tell the two apart.
+    let wide = card(None);
+    assert!(
+        widest(&wide) > 70,
+        "nothing here is wide enough to detect the difference:\n{wide}"
+    );
+}
+
+/// A hidden preview pane is zero columns wide, and a card fitted to zero is
+/// every cell cut back to its ellipsis. The number is not believed.
+#[test]
+fn a_width_of_zero_is_ignored_rather_than_fitted_to() {
+    let env = TestEnv::new();
+    let repo = busy(&env);
+    env.register("api", &repo, &[]);
+
+    env.grit()
+        .env("FZF_PREVIEW_COLUMNS", "0")
+        .args(["detail", "api"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a.txt"));
+}

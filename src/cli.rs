@@ -38,11 +38,12 @@ Seeing the dashboard without asking for it:
   eval \"$(grit shell init zsh)\"            or write that line yourself
 
 Environment:
-  GRIT_CONFIG        the registry file  (default ~/.config/grit/config.toml)
-  GRIT_CACHE         the last reading   (default ~/.cache/grit/status.json)
-  XDG_CONFIG_HOME    moves both of those defaults, as does XDG_CACHE_HOME
-  NO_COLOR           set to anything non-empty to drop colour; see --color
-  COLUMNS            table width to assume when stdout is not a terminal
+  GRIT_CONFIG          the registry file  (default ~/.config/grit/config.toml)
+  GRIT_CACHE           the last reading   (default ~/.cache/grit/status.json)
+  XDG_CONFIG_HOME      moves both of those defaults, as does XDG_CACHE_HOME
+  NO_COLOR             set to anything non-empty to drop colour; see --color
+  COLUMNS              table width to assume when stdout is not a terminal
+  FZF_PREVIEW_COLUMNS  the width inside an fzf preview pane; beats COLUMNS
 
 Every command carries its own examples:
   grit register --help   grit status --help   grit shell enable --help
@@ -697,6 +698,7 @@ mod tests {
             "XDG_CONFIG_HOME",
             "NO_COLOR",
             "COLUMNS",
+            "FZF_PREVIEW_COLUMNS",
         ] {
             assert!(
                 AFTER_HELP.contains(name),
