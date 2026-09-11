@@ -88,6 +88,34 @@ __grit_preview_toggle() {
 # of ours to erase.
 __grit_preview_forget() { __grit_preview_rows=0; }
 
+# Rebuild the prompt, so a PS1 assembled in PROMPT_COMMAND catches up with a
+# directory this widget has just changed.
+#
+# readline re-expands PS1 on every redraw, so a prompt that spells the working
+# directory `\w` is right again without any help. One *built* in PROMPT_COMMAND
+# — starship, oh-my-posh, powerline — is not: bash does not run PROMPT_COMMAND
+# again when a `bind -x` function returns, so PS1 still holds the string that
+# was built before the cd and the old directory stays on screen until the next
+# Enter. The cd then reads as having silently done nothing, which is the one
+# outcome worse than the key not being bound: you retype by hand what the shell
+# has already done.
+#
+# Both shapes are run, for the same reason the block further down assigns to
+# both — since 5.1 the variable may be an array, and prompt frameworks use it
+# that way. The array test is guarded by the version test rather than sitting
+# beside it, because `${VAR@a}` is a runtime error on bash 3.2.
+__grit_rebuild_prompt() {
+	local __grit_pc
+	if [ "${BASH_VERSINFO[0]}" -ge 5 ] && [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+		for __grit_pc in "${PROMPT_COMMAND[@]}"; do
+			[ -n "$__grit_pc" ] && eval "$__grit_pc"
+		done
+	else
+		[ -n "$PROMPT_COMMAND" ] && eval "$PROMPT_COMMAND"
+	fi
+	return 0
+}
+
 # The repo picker. fzf navigates; grit supplies the rows and the detail pane.
 #
 # Unlike the preview above, this does not draw anything itself — fzf owns the
@@ -130,7 +158,7 @@ __grit_picker() {
     if [ "$action" = cd ]; then
         local dir
         dir=$(command grit shell path "$alias" 2>/dev/null)
-        [ -n "$dir" ] && [ -d "$dir" ] && cd -- "$dir"
+        [ -n "$dir" ] && [ -d "$dir" ] && cd -- "$dir" && __grit_rebuild_prompt
         return 0
     fi
 

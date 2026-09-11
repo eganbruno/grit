@@ -513,6 +513,57 @@ def key_suite(grit, report, name, argv, rc_name, rc_body, prompt_wait=1.5, key="
     fx.clean()
 
 
+def bash_picker_cd_suite(grit, report):
+    """The bash picker's `ctrl-d`, and the same prompt question.
+
+    readline re-expands PS1 for each redraw, so a `\\w` prompt needs no help.
+    One built in PROMPT_COMMAND does: bash does not run PROMPT_COMMAND again
+    when a `bind -x` function returns. Logged from inside PROMPT_COMMAND rather
+    than read off the screen, for the same reason as the zsh case — and because
+    a `\\w` prompt would pass either way and prove nothing.
+    """
+    print("\nbash — the picker's ctrl-d")
+    if not have("bash"):
+        return report.skip("the bash picker cd", "bash not installed")
+    if not have("fzf"):
+        return report.skip("the bash picker cd", "fzf not installed")
+
+    fx = Fixture(grit)
+    log = os.path.join(fx.root, "prompt-command.log")
+    rc = fx.rc("rc.bash",
+               'PS1="% "\n'
+               f"COLUMNS={COLS}\n"
+               f"PROMPT_COMMAND='printf \"%s\\n\" \"$PWD\" >> {log}'\n"
+               f'eval "$({fx.grit} shell init bash)"\n')
+    sh = Shell(["bash", "--rcfile", rc, "-i"], fx.env())
+    sh.run(f"cd {fx.root}", 1.0)
+
+    sh.send("\x07\x07")
+    drawn = flatten(sh.read(4.0))
+    if "ctrl-d: cd" not in drawn:
+        report.check("the bash picker opens for the cd test", False, repr(drawn[-400:]))
+        sh.close()
+        fx.clean()
+        return
+
+    sh.send("\x04")
+    sh.read(3.0)
+
+    seen = open(log).read().splitlines() if os.path.exists(log) else []
+    report.check("PROMPT_COMMAND is re-run in the new directory",
+                 bool(seen) and seen[-1].endswith("/api"),
+                 f"last saw {seen[-1] if seen else '(nothing)'!r}")
+
+    landed = sh.run('printf "CWD=%s\\n" "$PWD"', 1.5)
+    said = [l.strip() for l in landed.splitlines() if l.strip().startswith("CWD=/")]
+    report.check("and the bash shell really is there",
+                 bool(said) and said[-1].endswith("/api"),
+                 repr(landed[-200:]))
+
+    sh.close()
+    fx.clean()
+
+
 def bash_prompt_command_suite(grit, report):
     """grit hooks `PROMPT_COMMAND` so a table that scrolled into real output
     stops being ours to erase. It is somebody else's variable, and bash 5.1
@@ -698,6 +749,66 @@ def picker_suite(grit, report):
     fx.clean()
 
 
+def picker_cd_suite(grit, report):
+    """`ctrl-d` changes the directory, and the prompt says so straight away.
+
+    The cd itself was never the hard part. Showing it was: `zle reset-prompt`
+    re-*displays* $PROMPT, and a prompt assembled in `precmd` — powerlevel10k,
+    starship, oh-my-posh — was assembled before the cd, so the old directory
+    stayed on screen until the next Enter. That reads as ctrl-d having done
+    nothing at all, and the reasonable response is to type the cd out by hand.
+
+    Asserted through a precmd hook that logs `$PWD` rather than off the screen,
+    because the screen recovers on its own: powerlevel10k's async worker
+    refreshes a second or so later, so a test that waited to look would pass
+    against the bug it is here to catch.
+    """
+    print("\nzsh — the picker's ctrl-d")
+    if not have("zsh"):
+        return report.skip("the picker cd", "zsh not installed")
+    if not have("fzf"):
+        return report.skip("the picker cd", "fzf not installed")
+
+    fx = Fixture(grit)
+    log = os.path.join(fx.root, "precmd.log")
+    rc = fx.rc("rc.zsh",
+               "PS1='%% '\n"
+               f"_grit_test_precmd() {{ print -r -- $PWD >> {log} }}\n"
+               "precmd_functions+=(_grit_test_precmd)\n"
+               f'eval "$({fx.grit} shell init zsh)"\n')
+    sh = Shell(["zsh", "-f", "-i"], fx.env())
+    sh.run(f"source {rc}", 1.2)
+    sh.run(f"cd {fx.root}", 1.0)
+
+    sh.send("\x07\x07")
+    drawn = flatten(sh.read(4.0))
+    if "ctrl-d: cd" not in drawn:
+        report.check("the picker opens for the cd test", False, repr(drawn[-400:]))
+        sh.close()
+        fx.clean()
+        return
+
+    sh.send("\x04")
+    sh.read(3.0)
+
+    # Read from the file, not the shell: asking the shell would mean pressing
+    # Enter, and Enter runs precmd for real — which is precisely the thing
+    # that used to be the only way to see the new directory.
+    seen = open(log).read().splitlines() if os.path.exists(log) else []
+    report.check("the prompt is rebuilt in the new directory",
+                 bool(seen) and seen[-1].endswith("/api"),
+                 f"last precmd saw {seen[-1] if seen else '(nothing)'!r}")
+
+    landed = sh.run("print -r -- CWD=$PWD", 1.5)
+    said = [l.strip() for l in landed.splitlines() if l.strip().startswith("CWD=/")]
+    report.check("and the shell really is there",
+                 bool(said) and said[-1].endswith("/api"),
+                 repr(landed[-200:]))
+
+    sh.close()
+    fx.clean()
+
+
 def picker_optout_suite(grit, report):
     """Turning the picker off unbinds it and touches nothing else.
 
@@ -770,8 +881,10 @@ def main():
     zsh_staleness_suite(grit, report)
     resource_suite(grit, report)
     picker_suite(grit, report)
+    picker_cd_suite(grit, report)
     picker_optout_suite(grit, report)
     bash_picker_suite(grit, report)
+    bash_picker_cd_suite(grit, report)
     key_suite(grit, report, "bash", ["bash", "--norc", "-i"], "rc.bash",
               lambda fx: f'PS1="% "\nCOLUMNS={COLS}\neval "$({fx.grit} shell init bash)"\n')
     bash_prompt_command_suite(grit, report)

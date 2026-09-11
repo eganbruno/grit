@@ -309,6 +309,33 @@ _grit_preview_fire() {
 	return 0
 }
 
+# Rebuild the prompt, so one assembled in `precmd` catches up with a directory
+# this widget has just changed.
+#
+# `zle reset-prompt` re-*displays* $PROMPT. It does not rebuild a $PROMPT that
+# was assembled before the cd, and powerlevel10k, starship and oh-my-posh all
+# assemble theirs in `precmd` rather than leaving the work to prompt expansion.
+# On those the picker's ctrl-d changed the directory and then left the old one
+# on screen until the next Enter — so the cd read as having silently done
+# nothing, which is a worse failure than not being bound at all: you retype by
+# hand what the shell has already done.
+#
+# Measured on powerlevel10k. `p10k display -r` is not the fix — it redraws the
+# same stale string and leaves a second prompt behind it.
+#
+# zsh calls a bare `precmd` and then each of `precmd_functions`, so this does
+# the same, in that order. A name left in the array whose function has gone is
+# skipped rather than erroring: this runs inside a widget, where an error is a
+# line of noise over the prompt and the cd it was reporting is already done.
+_grit_rebuild_prompt() {
+	(( $+functions[precmd] )) && precmd
+	local hook
+	for hook in $precmd_functions; do
+		(( $+functions[$hook] )) && $hook
+	done
+	return 0
+}
+
 # Open the repo picker: every repo on the left, `grit detail` on the right.
 #
 # fzf does the navigating. Not a shortcut taken for want of a terminal library —
@@ -349,6 +376,7 @@ _grit_picker() {
         dir=$(command grit shell path $alias 2>/dev/null)
         if [[ -n $dir && -d $dir ]]; then
             builtin cd -- $dir
+            _grit_rebuild_prompt
             zle reset-prompt
         fi
         return 0
