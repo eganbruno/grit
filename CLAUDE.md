@@ -309,6 +309,22 @@ that shell's directory.
 - **`grit shell path` exists so the shell does not parse JSON.** `show --json`
   carries the same fact, but reading it from a key binding meant either a jq
   dependency or a grep-and-sed that is wrong on a path with a quote in it.
+- **A cd inside a widget is not on screen until the prompt is rebuilt.**
+  `zle reset-prompt` re-*displays* `$PROMPT`; it does not rebuild one that was
+  assembled before the cd, and powerlevel10k, starship and oh-my-posh all
+  assemble theirs in `precmd`. So `^G^G` then `^D` changed the directory and
+  left the old one on the prompt until the next Enter — which reads as the key
+  having done nothing, and the response to that is to type the cd out by hand.
+  `_grit_rebuild_prompt` runs the hooks first, in the order zsh runs them.
+  `p10k display -r` is not the fix: it redraws the same stale string and leaves
+  a second prompt behind. bash has the same hole through `PROMPT_COMMAND`,
+  which it does not re-run when a `bind -x` function returns — a `\w` prompt
+  is fine there, a built one is not. fish needs nothing: its prompt is a
+  function that `repaint` re-runs.
+  Both are covered in `tests/shell/preview.py`, and both assert through a hook
+  that logs `$PWD` rather than off the screen — powerlevel10k's async worker
+  repaints a second or so later, so a test that waited to look would pass
+  against the bug it is there to catch.
 - **`$COLUMNS` is wrong inside the preview pane, and `$FZF_PREVIEW_COLUMNS` is
   not.** fzf exports both, but it runs the preview command through `$SHELL -c`,
   and zsh re-derives `COLUMNS` from the tty as it starts — the tty being the
